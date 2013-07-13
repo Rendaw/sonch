@@ -56,29 +56,42 @@ Core::Core(std::string const &Root, std::string InstanceName)
 				auto RandomGenerator = std::mt19937_64{std::random_device{}()};
 				InstanceID = std::uniform_int_distribution<UUID>()(RandomGenerator);
 			}
-			/*std::vector<char> InstanceFilename;
+			
+			// Put together a unique filename
+			std::vector<char> InstanceFilename;
 			InstanceFilename.resize(InstanceName.size() + sizeof(InstanceID) * 2 + 2);
-			InstanceFilename = InstanceName;
-			InstanceFilename += '-';
+			memcpy(&InstanceFilename[0], InstanceName.c_str(), InstanceName.size());
+			InstanceFilename[InstanceName.size()] = '-';
 			for (unsigned int const Offset = 0; Offset < sizeof(InstanceID); ++Offset)
 			{
-				InstanceFilename[Offset * 2] = 'a' + *(reinterpret_cast<char *>(&InstanceID) + Offset) & 0xF;
-				InstanceFilename[Offset * 2 + 1] = 'a' + *(reinterpret_cast<char *>(&InstanceID) + Offset) & 0xF0;
+				InstanceFilename[InstanceName.size() + 1 + Offset * 2] = 
+					'a' + *(reinterpret_cast<char *>(&InstanceID) + Offset) & 0xF;
+				InstanceFilename[InstanceName.size() + 1 + Offset * 2 + 1] = 
+					'a' + *(reinterpret_cast<char *>(&InstanceID) + Offset) & 0xF0;
 			}
-			InstanceFilename[sizeof(InstanceID) * 2] = '_';
-			memcpy(&InstanceFilename[0], InstanceName.c_str(), Instance.size());
-			InstanceFilename.back() = 0;*/
+			InstanceFilename[InstanceName.size() + 1 + sizeof(InstanceID) * 2] = '_';
+			InstanceFilename.back() = 0;
 
 			// Prepare the base file hierarchy
 			boost::filesystem::create_directory(RootPath);
 			boost::filesystem::create_directory(RootPath / "." App);
-			boost::filesystem::create_directory(RootPath / SplitDir);
+			boost::filesystem::create_directory(RootPath / "." App / SplitDir);
+			boost::filesystem::create_directory(RootPath / "." App / SplitDir / &InstanceName[0]);
 
-			boost::filesystem::path StaticDataPath = RootPath / "." App / "static";
-			boost::filesystem::ofstream Out(StaticDataPath, std::ofstream::out | std::ofstream::binary);
-			auto const &Data = StaticDataV1::Write(InstanceName, InstanceID);
-			if (!Out) throw SystemError() << "Could not create file '" << StaticDataPath << "'.";
-			Out.write((char const *)&Data[0], Data.size());
+			{
+				boost::filesystem::path StaticDataPath = RootPath / "." App / "static";
+				boost::filesystem::ofstream Out(StaticDataPath, std::ofstream::out | std::ofstream::binary);
+				auto const &Data = StaticDataV1::Write(InstanceName, InstanceID);
+				if (!Out) throw SystemError() << "Could not create file '" << StaticDataPath << "'.";
+				Out.write((char const *)&Data[0], Data.size());
+			}
+
+			{
+				boost::filesystem::path ReadmePath = RootPath / App "-share-readme.txt";
+				boost::filesystem::ofstream Out(ReadmePath);
+				if (!Out) throw SystemError() << "Could not create file '" << StaticDataPath << "'.";
+				Out << "Do not modify the contents of this directory.\n\nThis directory is the unmounted data for a " App " share.  Modifying the contents could cause data corruption.  Moving and changing the permissions for this folder only (and not it's contents) is fine." << std::endl;
+			}
 		}
 		else
 		{
@@ -105,4 +118,8 @@ Core::Core(std::string const &Root, std::string InstanceName)
 	catch (boost::filesystem::filesystem_error &Error)
 		{ throw SystemError() << Error.what(); }
 }
+		
+std::string Core::GetInstancePath(void) const { return RootPath / "." App / SplitDir; }
+std::string Core::GetMainInstancePath(void) const;
+std::string Core::GetMountSplitPath(void) const;
 
