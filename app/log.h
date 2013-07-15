@@ -3,6 +3,10 @@
 
 #include <sstream>
 #include <iostream>
+#include <fstream>
+#include <cassert>
+
+#include "error.h"
 
 struct NullLogStream
 {
@@ -44,7 +48,7 @@ struct StandardOutLog
 		ErrorPrefix = ErrorPrefixStream.str();
 	}
 #ifndef NDEBUG
-	StandardLogStream<false> Debug(void) { return {std::cout, DebugPrefix}; }
+	StandardLogStream<true> Debug(void) { return {std::cout, DebugPrefix}; }
 #else
 	NullLogStream Debug(void) { return NullLogStream(); }
 #endif
@@ -53,6 +57,37 @@ struct StandardOutLog
 	StandardLogStream<true> Error(void) { return {std::cerr, ErrorPrefix}; }
 
 	private:
+		std::string 
+#ifndef NDEBUG
+			DebugPrefix,
+#endif
+			NotePrefix, WarnPrefix, ErrorPrefix;
+};
+
+struct FileLog
+{
+	FileLog(std::string const &Path) : Stream(Path)
+	{
+		assert(Stream);
+		if (!Stream) throw SystemError() << "Could not open log file \"" << Path << "\"";
+#ifndef NDEBUG
+		DebugPrefix = "Debug: ";
+#endif
+		NotePrefix = "Note: ";
+		WarnPrefix = "Warn: ";
+		ErrorPrefix = "Error: ";
+	}
+#ifndef NDEBUG
+	StandardLogStream<true> Debug(void) { return {Stream, DebugPrefix}; }
+#else
+	NullLogStream Debug(void) { return NullLogStream(); }
+#endif
+	StandardLogStream<false> Note(void) { return {Stream, NotePrefix}; }
+	StandardLogStream<false> Warn(void) { return {Stream, WarnPrefix}; }
+	StandardLogStream<true> Error(void) { return {Stream, ErrorPrefix}; }
+
+	private:
+		std::ofstream Stream;
 		std::string 
 #ifndef NDEBUG
 			DebugPrefix,
