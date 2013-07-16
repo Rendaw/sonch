@@ -35,7 +35,7 @@ class FuseContext
 	public:
 		FuseContext() : 
 			InstanceRoot((PreinitContext.RootPath / "." App / SplitDir).string()), 
-			MainInstanceRoot((PreinitContext.RootPath / "." App / SplitDir / PreinitContext.InstanceName).string()), 
+			MainInstanceRoot((PreinitContext.RootPath / "." App / SplitDir / PreinitContext.InstanceFilename).string()), 
 			SplitPath(SplitDir), 
 			Log((PreinitContext.RootPath / "log.txt").string())
 		{
@@ -47,7 +47,7 @@ class FuseContext
 			std::string Out;
 			if (IsSplitPath(Path)) Out = InstanceRoot + Path;
 			else Out = MainInstanceRoot + Path;
-			Log.Debug() << "Translating " << Path << " to " << Out;
+			Log.Debug() << "Translating " << Path << " to " << Out << " (split? " << (IsSplitPath(Path) ? "true" : "false") << ")";
 			return Out;
 		}
 
@@ -55,9 +55,11 @@ class FuseContext
 		{
 			assert(Path.length() >= 1);
 			return (Path.length() >= SplitPath.length() - 1) &&
-					(((Path.length() == SplitPath.length() - 1) && 
+				(
+					((Path.length() == SplitPath.length() - 1) && 
 						(Path.compare(0, SplitPath.length() - 1, SplitPath) == 0)) ||
-					(Path.compare(0, SplitPath.length(), SplitPath) == 0));
+					(Path.compare(0, SplitPath.length(), SplitPath) == 0)
+				);
 		}
 
 	private:
@@ -108,7 +110,6 @@ int main(int argc, char **argv)
 
 	try
 	{
-		std::string InstanceName;
 		if (argc >= 3) InstanceName = argv[3];
 
 		auto const GetInstanceFilename = [](std::string const &Name, UUID ID)
@@ -209,6 +210,8 @@ int main(int argc, char **argv)
 	fuse_operations FuseCallbacks{0};
 
 	// Non-filesystem events
+	assert(!InstanceName.empty());
+	assert(!InstanceFilename.empty());
 	PreinitContext.InstanceName = InstanceName;
 	PreinitContext.InstanceID = InstanceID;
 	PreinitContext.InstanceFilename = InstanceFilename;
