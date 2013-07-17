@@ -2,6 +2,8 @@
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 
+#include "../app/error.h"
+
 struct AssertError
 {
 	int Line;
@@ -18,13 +20,7 @@ int main(int argc, char **argv)
 	boost::filesystem::path Root("testshare_base");
 	boost::filesystem::path Mount("testshare");
 
-	struct Cleanup
-	{
-		Cleanup(std::function<void(void)> &&Procedure) : Procedure(std::move(Procedure)) {}
-		~Cleanup(void) { Procedure(); }
-		private:
-			std::function<void(void)> Procedure;
-	} Cleanup([&]()
+	Cleanup Cleanup([&]()
 	{
 		system(("fusermount -u " + Mount.string()).c_str());
 

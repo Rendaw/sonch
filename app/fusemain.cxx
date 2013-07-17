@@ -30,6 +30,11 @@ struct
 	boost::filesystem::path RootPath;
 } PreinitContext;
 
+class File
+{
+
+};
+
 class FuseContext
 {
 	public:
@@ -167,6 +172,44 @@ int main(int argc, char **argv)
 					boost::filesystem::ofstream Out(ReadmePath);
 					if (!Out) throw SystemError() << "Could not create file '" << ReadmePath << "'.";
 					Out << "Do not modify the contents of this directory.\n\nThis directory is the unmounted data for a " App " share.  Modifying the contents could cause data corruption.  Moving and changing the permissions for this folder only (and not it's contents) is fine." << std::endl;
+				}
+
+				{
+					sqlite3 *Database = nullptr;
+					Cleanup DBCleanup([&Database]() { sqlite3_close(Database); });
+					if (sqlite3_open((RootPath / "." App / "database").string().c_str(), &Database) != 0)
+						throw SystemError() << "Could not create database: " << sqlite3_errmsg(Database);
+					char *ErrorMessage;
+					sqlite3_exec(Database,
+						"CREATE TABLE \"Instances\" "
+						"("
+							"\"Index\" INTEGER PRIMARY KEY  AUTOINCREMENT  NOT NULL , "
+							"\"Name\" VARCHAR NOT NULL , "
+							"\"UUID\" INTEGER NOT NULL "
+						")", nullptr, nullptr, &ErrorMessage);
+					if (ErrorMessage) throw SystemError() << "Failed to construct instance table: " << ErrorMessage;
+					sqlite3_exec(Database, 
+						"CREATE TABLE \"Files\" "
+						"("
+							"\"Instance\" INTEGER NOT NULL , "
+							"\"ID\" INTEGER NOT NULL , "
+							"\"ChangeInstance\" INTEGER NOT NULL , "
+							"\"ChangeID\" INTEGER NOT NULL , "
+							"\"Path\" VARCHAR NOT NULL , "
+							"\"Permissions\" BLOB NOT NULL , "
+							"PRIMARY KEY (\"Instance\", \"ID\")"
+						")", nullptr, nullptr, &ErrorMessage);
+					if (ErrorMessage) throw SystemError() << "Failed to construct file table: " << ErrorMessage;
+					sqlite3_exec(Database,
+						"CREATE TABLE \"ancestry\" "
+						"("
+							"\"Instance\" INTEGER NOT NULL , "
+							"\"ID\" INTEGER NOT NULL , "
+							"\"ParentInstance\" INTEGER NOT NULL , "
+							"\"ParentID\" INTEGER NOT NULL , "
+							"PRIMARY KEY (\"Instance\", \"ID\")"
+						")", nullptr, nullptr, &ErrorMessage);
+					if (ErrorMessage) throw SystemError() << "Failed to construct ancestry table: " << ErrorMessage;
 				}
 			}
 			else

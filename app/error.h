@@ -20,5 +20,13 @@ inline std::ostream& operator <<(std::ostream &Out, ErrorBase const &Error)
 
 struct UserError : ErrorBase {};
 struct SystemError : ErrorBase {};
+	
+struct Cleanup
+{
+	Cleanup(std::function<void(void)> &&Procedure) : Procedure(std::move(Procedure)) {}
+	~Cleanup(void) { Procedure(); }
+	private:
+		std::function<void(void)> Procedure;
+};
 
 #endif
