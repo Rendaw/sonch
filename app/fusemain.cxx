@@ -16,85 +16,70 @@
 #define FUSE_USE_VERSION 26
 #include <fuse.h>
 
-#define App "sonch"
-#define SplitDir "splits"
-
-typedef uint64_t UUID;
-
 struct
 {
-	std::string InstanceName;
-	UUID InstanceID;
-	std::string InstanceFilename;
-
 	boost::filesystem::path RootPath;
-} PreinitContext;
+	std::string InstanceName;
+} static PreinitContext;
 
-class File
+static std::unique_ptr<ShareCore> Core;
+
+void ExportAttributes(ShareFile &File, stat *Output)
 {
-
-};
-
-class FuseContext
-{
-	public:
-		FuseContext() : 
-			InstanceRoot((PreinitContext.RootPath / "." App / SplitDir).string()), 
-			MainInstanceRoot((PreinitContext.RootPath / "." App / SplitDir / PreinitContext.InstanceFilename).string()), 
-			SplitPath(SplitDir), 
-			Log((PreinitContext.RootPath / "log.txt").string())
-		{
-		}
-		
-		// Path methods
-		std::string TranslatePath(std::string const &Path)
-		{
-			std::string Out;
-			if (IsSplitPath(Path)) Out = InstanceRoot + Path;
-			else Out = MainInstanceRoot + Path;
-			Log.Debug() << "Translating " << Path << " to " << Out << " (split? " << (IsSplitPath(Path) ? "true" : "false") << ")";
-			return Out;
-		}
-
-		bool IsSplitPath(std::string const &Path)
-		{
-			assert(Path.length() >= 1);
-			return (Path.length() >= SplitPath.length() - 1) &&
-				(
-					((Path.length() == SplitPath.length() - 1) && 
-						(Path.compare(0, SplitPath.length() - 1, SplitPath) == 0)) ||
-					(Path.compare(0, SplitPath.length(), SplitPath) == 0)
-				);
-		}
-
-	private:
-		std::string const InstanceRoot;
-		std::string const MainInstanceRoot;
-		std::string const SplitPath;
-	public:
-		FileLog Log;
-};
-
-std::unique_ptr<FuseContext> Context;
-
-static bool ValidateFilename(std::string const &Filename)
-{
-	if (Filename.empty()) return false;
-	for (char const FilenameChar : Filename)
-	{
-		switch (FilenameChar)
-		{
-			case '\0':
-			case '/':
-#ifndef CUSTOM_STRANGE_PATHS
-			case '\\': case ':': case '*': case '?': case '"': case '<': case '>': case '|':
-#endif
-				return false;
-			default: break;
-		}
-	}
-	return true;
+	Output->st_mode = 
+		(File->Misc.IsFile ? ST_IFREG : ST_IFDIR) |
+		(File->Misc.OwnerRead ? ST_IRUSR : 0) |
+		(File->Misc.OwnerWrite ? ST_IWUSR : 0) |
+		(File->Misc.OwnerExecute ? ST_IXUSR : 0) |
+		(File->Misc.GroupRead ? ST_IRGRP : 0) |
+		(File->Misc.GroupWrite ? ST_IWGRP : 0) |
+		(File->Misc.GroupExecute ? ST_IXGRP : 0) |
+		(File->Misc.OtherRead ? ST_IROTH : 0) |
+		(File->Misc.OtherWrite ? ST_IWOTH : 0) |
+		(File->Misc.OtherExecute ? ST_IXOTH : 0);
+	Output->st_nlink = 0;
+	Output->st_uid = Core->GetUser();
+	Output->st_gid = Core->GetGroup();
+	Output->st_mtime = File->Timestamp;
+	Output->st_ctime = File->Timestamp;
 }
+
+bool CanRead(ShareFile const &File)
+{
+	return  
+		(File.Misc.OwnerRead && (Core->GetUID() == fuse_get_context()->uid)) ||
+		(File.Misc.GroupRead && (Core->GetGID() == fuse_get_context()->gid)) ||
+		(File.Misc.OtherRead);
+} 
+
+bool CanWrite(ShareFile const &File)
+{
+	return  
+		(File.Misc.OwnerWrite && (Core->GetUID() == fuse_get_context()->uid)) ||
+		(File.Misc.GroupWrite && (Core->GetGID() == fuse_get_context()->gid)) ||
+		(File.Misc.OtherWrite);
+} 
+
+bool CanExecute(ShareFile const &File)
+{
+	return  
+		(File.Misc.OwnerExecute && (Core->GetUID() == fuse_get_context()->uid)) ||
+		(File.Misc.GroupExecute && (Core->GetGID() == fuse_get_context()->gid)) ||
+		(File.Misc.OtherExecute);
+} 
+
+struct FileContext
+{
+	std::unique_ptr<ShareFile> File;
+	int FileDescriptor;
+	FileContext(void) : FileDescriptor(-1) {}
+	~FileContext(void) { if (FileDescriptor >= 0) close(FileDescriptor); }
+};
+
+struct DirectoryContext
+{
+	std::unique_ptr<ShareFile> File;
+};
 
 int main(int argc, char **argv)
 {
@@ -106,212 +91,175 @@ int main(int argc, char **argv)
 			"\tMounts " App " share LOCATION at MOUNTPOINT.  If LOCATION does not exist, creates a new share with NAME.");
 		return 0;
 	}
+	
+	PreinitContext.RootPath = argv[1];
+	if (argc >= 3) PreinitContext.InstanceName = argv[3];
 
-	std::string InstanceName;
-	UUID InstanceID;
-	std::string InstanceFilename;
-
-	boost::filesystem::path RootPath;
-
-	try
-	{
-		if (argc >= 3) InstanceName = argv[3];
-
-		auto const GetInstanceFilename = [](std::string const &Name, UUID ID)
-		{
-			std::vector<char> Buffer;
-			Buffer.resize(Name.size() + sizeof(ID) * 2 + 1);
-			memcpy(&Buffer[0], Name.c_str(), Name.size());
-			Buffer[Name.size()] = '-';
-			for (unsigned int Offset = 0; Offset < sizeof(ID); ++Offset)
-			{
-				Buffer[Name.size() + 1 + Offset * 2] = 'a' + (*(reinterpret_cast<char *>(&ID) + Offset) & 0xF);
-				Buffer[Name.size() + 1 + Offset * 2 + 1] = 'a' + ((*(reinterpret_cast<char *>(&ID) + Offset) & 0xF0) >> 4);
-			}
-			return std::string(Buffer.begin(), Buffer.end());
-		};
-
-		try
-		{
-			RootPath = argv[1];
-
-			typedef ProtocolClass StaticDataProtocol;
-			typedef ProtocolMessageClass<ProtocolVersionClass<StaticDataProtocol>, 
-				void(std::string InstanceName, UUID InstanceUUID)> StaticDataV1;
-
-			if (!boost::filesystem::exists(RootPath))
-			{
-				// Try to create an empty share, since the target didn't exist
-				// --
-				if (InstanceName.empty())
-					{ throw UserError() << "Share '" << RootPath.string() << "' does not exist.  Specify NAME to create a new share."; }
-				if (!ValidateFilename(InstanceName))
-					{ throw UserError() << "Instance NAME contains invalid characters."; }
-
-				auto RandomGenerator = std::mt19937_64{std::random_device{}()};
-				InstanceID = std::uniform_int_distribution<UUID>()(RandomGenerator);
-				
-				InstanceFilename = GetInstanceFilename(InstanceName, InstanceID);
-
-				// Prepare the base file hierarchy
-				boost::filesystem::create_directory(RootPath);
-				boost::filesystem::create_directory(RootPath / "." App);
-				boost::filesystem::create_directory(RootPath / "." App / SplitDir);
-				boost::filesystem::create_directory(RootPath / "." App / SplitDir / InstanceFilename);
-
-				{
-					boost::filesystem::path StaticDataPath = RootPath / "." App / "static";
-					boost::filesystem::ofstream Out(StaticDataPath, std::ofstream::out | std::ofstream::binary);
-					auto const &Data = StaticDataV1::Write(InstanceName, InstanceID);
-					if (!Out) throw SystemError() << "Could not create file '" << StaticDataPath << "'.";
-					Out.write((char const *)&Data[0], Data.size());
-				}
-
-				{
-					boost::filesystem::path ReadmePath = RootPath / App "-share-readme.txt";
-					boost::filesystem::ofstream Out(ReadmePath);
-					if (!Out) throw SystemError() << "Could not create file '" << ReadmePath << "'.";
-					Out << "Do not modify the contents of this directory.\n\nThis directory is the unmounted data for a " App " share.  Modifying the contents could cause data corruption.  Moving and changing the permissions for this folder only (and not it's contents) is fine." << std::endl;
-				}
-
-				{
-					sqlite3 *Database = nullptr;
-					Cleanup DBCleanup([&Database]() { sqlite3_close(Database); });
-					if (sqlite3_open((RootPath / "." App / "database").string().c_str(), &Database) != 0)
-						throw SystemError() << "Could not create database: " << sqlite3_errmsg(Database);
-					char *ErrorMessage;
-					sqlite3_exec(Database,
-						"CREATE TABLE \"Instances\" "
-						"("
-							"\"Index\" INTEGER PRIMARY KEY  AUTOINCREMENT  NOT NULL , "
-							"\"Name\" VARCHAR NOT NULL , "
-							"\"UUID\" INTEGER NOT NULL "
-						")", nullptr, nullptr, &ErrorMessage);
-					if (ErrorMessage) throw SystemError() << "Failed to construct instance table: " << ErrorMessage;
-					sqlite3_exec(Database, 
-						"CREATE TABLE \"Files\" "
-						"("
-							"\"Instance\" INTEGER NOT NULL , "
-							"\"ID\" INTEGER NOT NULL , "
-							"\"ChangeInstance\" INTEGER NOT NULL , "
-							"\"ChangeID\" INTEGER NOT NULL , "
-							"\"Path\" VARCHAR NOT NULL , "
-							"\"Permissions\" BLOB NOT NULL , "
-							"PRIMARY KEY (\"Instance\", \"ID\")"
-						")", nullptr, nullptr, &ErrorMessage);
-					if (ErrorMessage) throw SystemError() << "Failed to construct file table: " << ErrorMessage;
-					sqlite3_exec(Database,
-						"CREATE TABLE \"ancestry\" "
-						"("
-							"\"Instance\" INTEGER NOT NULL , "
-							"\"ID\" INTEGER NOT NULL , "
-							"\"ParentInstance\" INTEGER NOT NULL , "
-							"\"ParentID\" INTEGER NOT NULL , "
-							"PRIMARY KEY (\"Instance\", \"ID\")"
-						")", nullptr, nullptr, &ErrorMessage);
-					if (ErrorMessage) throw SystemError() << "Failed to construct ancestry table: " << ErrorMessage;
-				}
-			}
-			else
-			{
-				// Share exists, restore state
-				// --
-				if (!InstanceName.empty())
-					Log.Warn() << "Share exists, ignoring all other arguments.";
-
-				// Load static data
-				boost::filesystem::ifstream In(RootPath / "." App / "static", std::ifstream::in | std::ifstream::binary);
-				Protocol::Reader<StandardOutLog> Reader(Log);
-				Reader.Add<StaticDataV1>([&](std::string &ReadInstanceName, UUID &ReadInstanceUUID) 
-				{
-					InstanceName = ReadInstanceName;
-					InstanceID = ReadInstanceUUID;
-				});
-				bool Success = Reader.Read(In);
-				if (!Success)
-					throw SystemError() << "Could not read static data, file may be corrupt.";
-				
-				InstanceFilename = GetInstanceFilename(InstanceName, InstanceID);
-			}
-		}
-		catch (boost::filesystem::filesystem_error &Error)
-			{ throw SystemError() << Error.what(); }
-	}
-	catch (UserError &Message)
-	{
-		Log.Error() << Message;
-		return 1;
-	}
-	catch (SystemError &Message)
-	{
-		Log.Error() << "Encountered a system error during initialization.\n\t" << Message;
-		return 1;
-	}
-
-	// Set up fuse, start fuse
-	// --
 	fuse_operations FuseCallbacks{0};
+	
+	// Disabled
+	/*FuseCallbacks.link = [](const char *from, const char *to) { return -EPERM; };
+	FuseCallbacks.symlink = [](const char *from, const char *to) { return -EPERM; };
+	FuseCallbacks.readlink = [](const char *path, char *buf, size_t size) { return -EINVAL; };
+	FuseCallbacks.mknod = [](const char *, mode_t mode, dev_t) { return -EPERM; };
+	FuseCallbacks.chown = [](const char *path, uid_t uid, gid_t gid) { return -EPERM; };
+	
+	FuseCallbacks.setxattr = [](const char *path, const char *name, const char *value, size_t size, int flags)
+		{ return -EPERM; };
+
+	FuseCallbacks.getxattr = [](const char *path, const char *name, char *value, size_t size)
+		{ return -EPERM; };
+
+	FuseCallbacks.listxattr = [](const char *path, char *list, size_t size)
+		{ return -EPERM; };
+
+	FuseCallbacks.removexattr = [](const char *path, const char *name)
+		{ return -EPERM; };*/
 
 	// Non-filesystem events
-	assert(!InstanceName.empty());
-	assert(!InstanceFilename.empty());
-	PreinitContext.InstanceName = InstanceName;
-	PreinitContext.InstanceID = InstanceID;
-	PreinitContext.InstanceFilename = InstanceFilename;
-	PreinitContext.RootPath = RootPath;
 	FuseCallbacks.init = [](fuse_conn_info *conn) -> void *
 	{
-		Context.reset(new FuseContext());
+		try Core.reset(new ShareCore(PreinitContext.RootPath, PreinitContext.InstanceName));
+		catch (UserError &Message)
+		{
+			Log.Error() << Message;
+			exit(1);
+		}
+		catch (SystemError &Message)
+		{
+			Log.Error() << "Encountered a system error during initialization.\n\t" << Message;
+			exit(1);
+		}
 		return nullptr;
 	};
 
-	// Read actions
-	// Write actions
-	// TODO: Categorize
+	// Lookup/read metadata actions
 	FuseCallbacks.getattr = [](const char *path, struct stat *stbuf)
 	{
-		int Result = lstat(Context->TranslatePath(path).c_str(), stbuf);
+		std::unique_ptr<ShareFile> File = Core->Get(path);
+		if (!File) return -ENOENT;
+		int Result = lstat(File->RealPath().string().c_str(), stbuf);
 		if (Result == -1) return -errno;
-		return 0;
+		return ExportAttributes(File, stbuf);
 	};
 
 	FuseCallbacks.fgetattr = [](const char *, struct stat *stbuf, struct fuse_file_info *fi)
 	{
-		int Result = fstat(fi->fh, stbuf);
+		ShareFile *File = std::reinterpret_cast<ShareFile *>(fi->fh);
+		int Result = fstat(File->FileDescriptor, stbuf);
 		if (Result == -1) return -errno;
-		return 0;
+		return ExportAttributes(File, stbuf);
 	};
 
 	FuseCallbacks.access = [](const char *path, int mask)
 	{
-		int Result = access(Context->TranslatePath(path).c_str(), mask);
+		std::unique_ptr<ShareFile> File = Core->Get(path);
+		if (!File) return -ENOENT;
+		if (
+			(!(mask & R_OK) || CanRead(File)) &&
+			(!(mask & W_OK) || CanWrite(File)) &&
+			(!(mask & X_OK) || CanExecute(File))
+		) return 0;
+		return -EACCES;
+	};
+
+	FuseCallbacks.statfs = [](const char *path, struct statvfs *stbuf)
+	{
+		int Result = statvfs(Core->GetRootPath().string().c_str(), stbuf);
 		if (Result == -1) return -errno;
 		return 0;
 	};
 
-	FuseCallbacks.readlink = [](const char *path, char *buf, size_t size)
+	// Directory or file changes
+	FuseCallbacks.rename = [](const char *from, const char *to)
 	{
-		int Result = readlink(Context->TranslatePath(path).c_str(), buf, size - 1);
-		if (Result == -1) return -errno;
-		buf[Result] = '\0';
+		std::unique_ptr<ShareFile> To = Core->Get(to);
+		std::unique_ptr<ShareFile> From = Core->Get(from);
+		if (!From) return -ENOENT;
+		Core->Move(From, to);
+		if (To) Core->Delete(To);
+		/*int Result = rename(Core->TranslatePath(from).c_str(), Core->TranslatePath(to).c_str());
+		if (Result == -1) return -errno;*/
+		return 0;
+	};
+
+	FuseCallbacks.chmod = [](const char *path, mode_t mode)
+	{
+		std::unique_ptr<ShareFile> File = Core->Get(path);
+		if (!File) return -ENOENT;
+		Core->SetPermissions(File, 
+			mode & ST_IRUSR,
+			mode & ST_IWUSR,
+			mode & ST_IXUSR,
+			mode & ST_IRGRP,
+			mode & ST_IWGRP,
+			mode & ST_IXGRP,
+			mode & ST_IROTH,
+			mode & ST_IWOTH,
+			mode & ST_IXOTH);
+		return 0;
+	};
+	
+	FuseCallbacks.utimens = [](const char *path, const struct timespec ts[2])
+	{
+		std::unique_ptr<ShareFile> File = Core->Get(path);
+		if (!File) return -ENOENT;
+		Core->SetTimestamp(File, ts[1].tv_sec);
+		struct timeval tv[2];
+		tv[0].tv_sec = ts[0].tv_sec;
+		tv[0].tv_usec = ts[0].tv_nsec / 1000;
+		tv[1].tv_sec = ts[1].tv_sec;
+		tv[1].tv_usec = ts[1].tv_nsec / 1000;
+		utimes(File->GetRealPath().string().c_str(), tv);
+		return 0;
+	};
+
+	// Directory access
+	FuseCallbacks.mkdir = [](const char *path, mode_t mode)
+	{
+		std::unique_ptr<ShareFile> File = Core->Create(path, false,
+			mode & ST_IRUSR, mode & ST_IWUSR, mode & ST_IXUSR,
+			mode & ST_IRGRP, mode & ST_IWGRP, mode & ST_IXGRP,
+			mode & ST_IROTH, mode & ST_IWOTH, mode & ST_IXOTH);
+		if (!File) return -EEXIST;
+		return 0;
+	};
+
+	FuseCallbacks.opendir = [](const char *path, fuse_file_info *fi)
+	{
+		ShareFile *File = Core->Get(path).release();
+		if (!File) return -ENOENT;
+		if (File->IsFile) return -ENOTDIR;
+		if ((fi->flags & O_WRONLY) || (fi->flags & O_RDWR)) && !CanWrite(File) return -EACCES;
+		if ((fi->flags & O_RDONLY) || (fi->flags & O_RDWR)) && !CanRead(File) return -EACCES;
+		fi->fh = reinterpret_cast<decltype(fi->fh)>(File);
 		return 0;
 	};
 
 	FuseCallbacks.readdir = [](const char *, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi)
 	{
-		DIR *dp = reinterpret_cast<DIR *>(fi->fh);
-	
-		seekdir(dp, offset);
-		
-		struct dirent *de;
-		while ((de = readdir(dp)) != NULL) 
+		ShareFile *File = reinterpret_cast<ShareFile *>(fi->fh);
+
+		static unsigned int BlockCount = 100;
+
+		while (true)
 		{
-			struct stat st;
-			memset(&st, 0, sizeof(st));
-			st.st_ino = de->d_ino;
-			st.st_mode = de->d_type << 12;
-			if (filler(buf, de->d_name, &st, telldir(dp)))
-				break;
+			auto Files = Core->GetDirectory(*File, offset, BlockCount);
+			unsigned int Count = 0;
+			for (auto const &File : Files)
+			{
+				struct stat st;
+				memset(&st, 0, sizeof(st));
+				ExportAttributes(File, &st);
+				if (filler(buf, File.Name.c_str(), &st, offset + Count))
+				{
+					Count = 0;
+					break;
+				}
+				++Count;
+			}
+			if (Count < BlockCount) break;
+			offset += BlockCount;
 		}
 
 		return 0;
@@ -319,69 +267,47 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.releasedir = [](const char *, struct fuse_file_info *fi)
 	{
-		DIR *dp = reinterpret_cast<DIR *>(fi->fh);
-		closedir(dp);
-		return 0;
-	};
-
-	FuseCallbacks.mknod = [](const char *, mode_t mode, dev_t)
-		{ return -EPERM; };
-
-	FuseCallbacks.mkdir = [](const char *path, mode_t mode)
-	{
-		int Result = mkdir(Context->TranslatePath(path).c_str(), mode);
-		if (Result == -1) return -errno;
-		return 0;
-	};
-
-	FuseCallbacks.unlink = [](const char *path)
-	{
-		int Result = unlink(Context->TranslatePath(path).c_str());
-		if (Result == -1) return -errno;
+		std::unique_ptr<ShareFile> File(reinterpret_cast<ShareFile *>(fi->fh));
 		return 0;
 	};
 
 	FuseCallbacks.rmdir = [](const char *path)
 	{
-		int Result = rmdir(Context->TranslatePath(path).c_str());
-		if (Result == -1) return -errno;
+		std::unique_ptr<ShareFile> File = Core->Get(path).release();
+		if (!File) return -ENOENT;
+		if (Core->GetDirectory(*File, 0, 1).empty())
+			return -ENOTEMPTY;
+		Core->Delete(File);
 		return 0;
 	};
 
-	FuseCallbacks.symlink = [](const char *from, const char *to)
-		{ return -EPERM; };
-
-	FuseCallbacks.rename = [](const char *from, const char *to)
+	// File access
+	/*FuseCallbacks.create = [](const char *path, mode_t mode, struct fuse_file_info *fi)
 	{
-		int Result = rename(Context->TranslatePath(from).c_str(), Context->TranslatePath(to).c_str());
-		if (Result == -1) return -errno;
+		int fd = open(Core->TranslatePath(path).c_str(), fi->flags, mode);
+		if (fd == -1) return -errno;
+		fi->fh = fd;
 		return 0;
 	};
-
-	FuseCallbacks.link = [](const char *from, const char *to)
-		{ return -EPERM; };
-
-	FuseCallbacks.chmod = [](const char *path, mode_t mode)
+	
+	FuseCallbacks.open = [](const char *path, struct fuse_file_info *fi)
 	{
-		int Result = chmod(Context->TranslatePath(path).c_str(), mode);
+		ShareFile *Core->Get(path).release();
+		fi->fh = reinterpret_cast<decltype(fi->fh)>(ShareFile);
+		int Result = open(Core->TranslatePath(path).c_str(), fi->flags);
 		if (Result == -1) return -errno;
+		close(Result);
 		return 0;
 	};
 
-	FuseCallbacks.chown = [](const char *path, uid_t uid, gid_t gid)
-	{
-		int Result = lchown(Context->TranslatePath(path).c_str(), uid, gid);
-		if (Result == -1) return -errno;
-		return 0;
-	};
-
+	
 	FuseCallbacks.truncate = [](const char *path, off_t size)
 	{
-		int Result = truncate(Context->TranslatePath(path).c_str(), size);
+		int Result = truncate(Core->TranslatePath(path).c_str(), size);
 		if (Result == -1) return -errno;
 		return 0;
 	};
-
+	
 	FuseCallbacks.ftruncate = [](const char *, off_t size, struct fuse_file_info *fi)
 	{
 		int Result = ftruncate(fi->fh, size);
@@ -389,31 +315,10 @@ int main(int argc, char **argv)
 		return 0;
 	};
 
-	FuseCallbacks.utimens = [](const char *path, const struct timespec ts[2])
+	FuseCallbacks.unlink = [](const char *path)
 	{
-		struct timeval tv[2];
-		tv[0].tv_sec = ts[0].tv_sec;
-		tv[0].tv_usec = ts[0].tv_nsec / 1000;
-		tv[1].tv_sec = ts[1].tv_sec;
-		tv[1].tv_usec = ts[1].tv_nsec / 1000;
-		int Result = utimes(Context->TranslatePath(path).c_str(), tv);
+		int Result = unlink(Core->TranslatePath(path).c_str());
 		if (Result == -1) return -errno;
-		return 0;
-	};
-
-	FuseCallbacks.create = [](const char *path, mode_t mode, struct fuse_file_info *fi)
-	{
-		int fd = open(Context->TranslatePath(path).c_str(), fi->flags, mode);
-		if (fd == -1) return -errno;
-		fi->fh = fd;
-		return 0;
-	};
-
-	FuseCallbacks.open = [](const char *path, struct fuse_file_info *fi)
-	{
-		int Result = open(Context->TranslatePath(path).c_str(), fi->flags);
-		if (Result == -1) return -errno;
-		close(Result);
 		return 0;
 	};
 
@@ -431,20 +336,13 @@ int main(int argc, char **argv)
 		return Result;
 	};
 
-	FuseCallbacks.statfs = [](const char *path, struct statvfs *stbuf)
-	{
-		int Result = statvfs(Context->TranslatePath(path).c_str(), stbuf);
-		if (Result == -1) return -errno;
-		return 0;
-	};
-
 	FuseCallbacks.release = [](const char *, struct fuse_file_info *fi)
 	{
 		close(fi->fh);
 		return 0;
 	};
 
-	FuseCallbacks.fsync = [](const char *path, int isdatasync, struct fuse_file_info *fi)
+	FuseCallbacks.fsync = [](const char *, int isdatasync, struct fuse_file_info *fi)
 	{
 		int Result;
 
@@ -457,19 +355,7 @@ int main(int argc, char **argv)
 #endif
 		if (Result == -1) return -errno;
 		return 0;
-	};
-
-	FuseCallbacks.setxattr = [](const char *path, const char *name, const char *value, size_t size, int flags)
-		{ return -EPERM; };
-
-	FuseCallbacks.getxattr = [](const char *path, const char *name, char *value, size_t size)
-		{ return -EPERM; };
-
-	FuseCallbacks.listxattr = [](const char *path, char *list, size_t size)
-		{ return -EPERM; };
-
-	FuseCallbacks.removexattr = [](const char *path, const char *name)
-		{ return -EPERM; };
+	};*/
 
 	fuse_args FuseArgs = FUSE_ARGS_INIT(0, NULL);
 	fuse_opt_add_arg(&FuseArgs, argv[0]);
