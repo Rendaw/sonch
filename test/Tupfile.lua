@@ -5,7 +5,7 @@ ProtocolTest = Define.Executable
 	Name = 'protocol', 
 	Sources = Item 'protocol.cxx'
 }
-Define.Test { Executable = ProtocolTest }
+--Define.Test { Executable = ProtocolTest }
 
 FSBasicsTest = Define.Executable
 {

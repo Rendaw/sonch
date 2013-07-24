@@ -48,9 +48,11 @@ struct ShareCore
 	
 	private:
 		bfs::path Root;
+		bfs::path FilePath;
 
 		std::string InstanceName;
 		UUID InstanceID;
+		uint64_t InstanceIndex;
 		std::string InstanceFilename;
 
 		std::unique_ptr<SQLDatabase> Database;

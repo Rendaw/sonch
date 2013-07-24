@@ -50,13 +50,17 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 	auto const InitializeDatabase = [](void)
 	{
 		Database.reset(new SQLDatabase(DatabasePath));
-		Statement.NewFile = Database->Prepare<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t, std::string, std::string, std::string, MiscFileData>
-			("INSERT INTO \"Files\" VALUES (\"?\", \"?\", \"?\", \"?\", \"?\", \"?\", \"?\", \"?\");");
+		Statement.Begin = Database->Prepare<std::tuple<>>("BEGIN");
+		Statement.End = Database->Prepare<std::tuple<>>("COMMIT");
+		Statement.IncrementFileCounter = Database->Prepare<std::tuple<>>("UPDATE \"Counters\" SET \"File\" = \"File\" + 1");
+		Statement.GetFileCounter = Database->Prepare<std::tuple<>, std::tuple<uint64_t>>("SELECT \"File\" FROM \"Counters\"");
+		Statement.IncrementFileCounter = Database->Prepare<std::tuple<>>("UPDATE \"Counters\" SET \"File\" = \"File\" + 1");
+		Statement.NewFile = Database->Prepare<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t, std::string, std::string, std::string, MiscFileData>>
+			("INSERT OR IGNORE INTO \"Files\" VALUES (\"?\", \"?\", \"?\", \"?\", \"?\", \"?\", \"?\", \"?\");");
 	};
 
 	try
 	{
-
 		typedef ProtocolClass StaticDataProtocol;
 		typedef ProtocolMessageClass<ProtocolVersionClass<StaticDataProtocol>, 
 			void(std::string InstanceName, UUID InstanceUUID)> StaticDataV1;
@@ -68,6 +72,10 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			End,
 			Last = End - 1
 		};
+			
+		bfs::path const TransactionPath = RootPath / "." App / "transactions";
+
+		FilePath = RootPath / "." App / "files";
 
 		if (!bfs::exists(RootPath))
 		{
@@ -86,14 +94,14 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			// Prepare the base file hierarchy
 			bfs::create_directory(RootPath);
 			bfs::create_directory(RootPath / "." App);
-			bfs::create_directory(RootPath / "." App / SplitDir);
-			bfs::create_directory(RootPath / "." App / SplitDir / InstanceFilename);
+			bfs::create_directory(FilePath);
+			bfs::create_directory(TransactionPath);
 
 			{
 				bfs::path StaticDataPath = RootPath / "." App / "static";
 				bfs::ofstream Out(StaticDataPath, std::ofstream::out | std::ofstream::binary);
-				auto const &Data = StaticDataV1::Write(InstanceName, InstanceID);
 				if (!Out) throw SystemError() << "Could not create file '" << StaticDataPath << "'.";
+				auto const &Data = StaticDataV1::Write(InstanceName, InstanceID);
 				Out.write((char const *)&Data[0], Data.size());
 			}
 
@@ -110,7 +118,13 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 					"\"Version\" INTEGER"
 				")");
 				Database->Execute("INSERT INTO \"Stats\" VALUES (?)", DatabaseVersion::Last);
-				Database->Execute ("CREATE TABLE \"Files\" "
+				Database->Execute("CREATE TABLE \"Counters\" "
+				"("
+					"\"File\" INTEGER , "
+					"\"Change\" INTEGER , "
+				")");
+				Database->Execute("INSERT INTO \"Counters\" VALUES (?, ?)", 1, 1); // 0 reserved for root
+				Database->Execute("CREATE TABLE \"Files\" "
 				"("
 					"\"Instance\" INTEGER , "
 					"\"ID\" INTEGER , "
@@ -173,6 +187,28 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			}
 			Database->Execute("UPDATE \"Stats\" SET \"Version\" = ?", DatabaseVersion::Last);
 		}
+
+		Transaction.CreateFile = [this](
+			uint64_t const &ID, uint64_t const &ChangeID,
+			bfs::path const &Path, bool const &IsFile,
+			bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
+			bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
+			bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute)
+		{
+			Statement.CreateFile(ID, InstanceIndex, ChangeID, InstanceIndex, InstanceIndex, 
+				Path.parent_path(), Path.filename(), std::time(),
+				MiscFileData{OwnerRead, OwnerWrite, OwnerExecute,
+					GroupRead, GroupWrite, GroupExecute,
+					OtherRead, OtherWrite, OtherExecute,
+					IsFile});
+			bfs::path const InternalFilename = 
+				FilePath / (String() << ID << "-" << InstanceIndex << "-" << ChangeID << "-" << InstanceIndex);
+			bfs::ofstream Out(InternalFilename, std::ofstream::out | std::ofstream::binary);
+			if (!Out) throw SystemError() << "Could not create file '" << InternalFilename << "'";
+		};
+
+		Trans.reset(new Transactor(Mutex, TransactionPath),
+			Transact.CreateFile);
 	}
 	catch (bfs::filesystem_error &Error)
 		{ throw SystemError() << Error.what(); }
@@ -184,12 +220,43 @@ unsigned int ShareCore::GetUser(void) const { return geteuid(); }
 
 unsigned int ShareCore::GetGroup(void) const { return geteuid(); }
 
-std::unique_ptr<ShareFile> Create(bfs::path const &Path, bool IsFile, 
+std::unique_ptr<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile, 
 	bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
 	bool GroupRead, bool GroupWrite, bool GroupExecute,
-	bool OtherRead, bool OtherWrite, bool OtherExecute);
-std::unique_ptr<File> Get(bfs::path const &Path);
-std::vector<std::unique_ptr<ShareFile>> GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count);
+	bool OtherRead, bool OtherWrite, bool OtherExecute)
+{
+	Statements.Begin();
+	uint64_t ID = Statements.GetFileID();
+	Statements.IncrementFileID();
+	Statements.End();
+	Statements.Begin();
+	uint64_t ChangeID = Statements.GetChangeID();
+	Statements.IncrementChangeID();
+	Statements.End();
+	if (InstanceIndex == 0)
+	{
+		Statements.AddInstance(Instance, InstanceID);
+		InstanceIndex = Statements.GetInstance(Instance, InstanceID);
+	}
+	Transact(Transact.CreateFile, 
+		ID, ChangeID, Path, IsFile,
+		OwnerRead, OwnerWrite, OwnerExecute,
+		GroupRead, GroupWrite, GroupExecute,
+		OtherRead, OtherWrite, OtherExecute);
+}
+
+std::unique_ptr<ShareFile> ShareCore::Get(bfs::path const &Path)
+{
+	if ((Path.size() >= 1) && (Path[0] == 
+	auto Values = Statements.GetFileByPath(Path.parent_path(), Path.filename());
+	return {new ShareFile(Values)};
+}
+
+std::vector<std::unique_ptr<ShareFile>> ShareCore::GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count)
+{
+	std::unique_ptr<ShareFile> FileAgain = Statements.GetFile(File.ID, File.InstanceIndex);
+	Statements.GetFiles((bfs::path(FileAgain.Path) / FileAgain.Filename).string(), 
+}
 void SetPermissions(ShareFile const &File, 
 	bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
 	bool GroupRead, bool GroupWrite, bool GroupExecute,

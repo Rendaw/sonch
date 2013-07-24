@@ -1,12 +1,9 @@
 #ifndef transaction_h
 #define transaction_h
 
-		typedef ProtocolClass StaticDataProtocol;
-		typedef ProtocolMessageClass<ProtocolVersionClass<StaticDataProtocol>, 
-			void(std::string InstanceName, UUID InstanceUUID)> StaticDataV1;
 template <typename TransProto, typename TransVersion = ProtocolVersionClass<TransProto>> struct Transactor
 {
-	template <typename ...CallbackTypes> Transactor(std::mutex &CoreMutex, bfs::path const &TransactionPath, CallbackTypes const & ... Callbacks) : CoreMutex(CoreMutex)
+	template <typename ...CallbackTypes> Transactor(std::mutex &CoreMutex, bfs::path const &TransactionPath, CallbackTypes const & ... Callbacks) : CoreMutex(CoreMutex), TransactionPath(TransactionPath)
 	{
 		StandardOutLog Log("transaction recovery");
 		Protocol::Reader<StandardOutLog> Reader(Log);
@@ -24,22 +21,37 @@ template <typename TransProto, typename TransVersion = ProtocolVersionClass<Tran
 		}
 	}
 
-	// TODO Act(Method)
+	template <typename ...ArgumentTypes> void Act(void (*Callback)(ArgumentTypes const &...), ArgumentTypes const &... Arguments)
+	{
+		bfs::path ThreadPath = TransactionPath / std::this_thread::get_id();
+		bfs::ofstream Out(ThreadPath, std::ofstream::out | std::ofstream::binary);
+		if (!Out) throw SystemError() << "Could not create file '" << ThreadPath << "'.";
+		auto const &Data = ProtocolMessageClass<TransVersion, void(ArgumentTypes ...)>::Write(Arguments...);
+		Out.write((char const *)&Data[0], Data.size());
+		{
+			std::lock_guard Guard(CoreMutex);
+			Callback(Arguments...);
+		}
+		bfs::remove(ThreadPath / std::this_thread::get_id());
+	}
 
 	private:
-		template <typename ...CallbackTypes> struct AddToReader {};
-		template <typename ...TransactionType, typename ...RemainingCallbackTypes> struct AddToReader<std::function<Definition & ...>, RemainingCallbackTypes...>
+		template <typename ...CallbackTypes> struct Register {};
+		template <typename ...TransactionType, typename ...RemainingCallbackTypes> struct Register<std::function<Definition & ...>, RemainingCallbackTypes...>
 		{
-			AddToReader(Protocol::Reader<StandardOutLog> &Reader, std::function<void(TransactionType...)> const &Callback, RemainingCallbackTypes const & ... OtherCallbacks)
+			Register(Protocol::Reader<StandardOutLog> &Reader, std::function<void(TransactionType...)> const &Callback, RemainingCallbackTypes const & ... OtherCallbacks)
 			{
 				Reader.Add<TransVersion, TransactionType>(Callback);
-				AddToReader<RemainingCallbackTypes...>(Reader, OtherCallbacks...);
+				Register<RemainingCallbackTypes...>(Reader, OtherCallbacks...);
 			}
 		};
-		template <> struct AddToReader
+		template <> struct Register
 		{
-			AddToReader(Protocol::Reader<StandardOutLog> &Reader, std::function<void(TransactionType...)> const &Callback, RemainingCallbackTypes const & ... OtherCallbacks) {}
+			Register(Protocol::Reader<StandardOutLog> &Reader, std::function<void(TransactionType...)> const &Callback, RemainingCallbackTypes const & ... OtherCallbacks) {}
 		};
+
+		std::mutex &CoreMutex;
+		bfs::path const &TransactionPath;
 };
 
 #endif

@@ -34,6 +34,7 @@ struct SQLDatabase
 					throw SystemError() << "Could not execute query \"" << Template << "\": " << sqlite3_errmsg(Context);
 				Unbind<std::tuple<>, std::tuple<ResultTypes...>>(Statement, 0, Function);
 			}
+			sqlite3_reset(Statement);
 		}
 
 		std::tuple<ResultTypes ...> GetTuple(ArgumentTypes const & ...Arguments)
