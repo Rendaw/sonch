@@ -173,13 +173,21 @@ int main(int argc, char **argv)
 	// Directory or file changes
 	FuseCallbacks.rename = [](const char *from, const char *to)
 	{
-		std::unique_ptr<ShareFile> To = Core->Get(to);
 		std::unique_ptr<ShareFile> From = Core->Get(from);
 		if (!From) return -ENOENT;
-		Core->Move(From, to);
-		if (To) Core->Delete(To);
-		/*int Result = rename(Core->TranslatePath(from).c_str(), Core->TranslatePath(to).c_str());
-		if (Result == -1) return -errno;*/
+		try
+		{
+			Core->Move(From, to);
+		}
+		catch (ActionError const &Error)
+		{
+			switch (Error.Value)
+			{
+				case ActionError::Invalid: return -ENOTDIR;
+				case ActionError::Missing: return -ENOENT;
+				default: assert(false);
+			}
+		}
 		return 0;
 	};
 
@@ -217,11 +225,21 @@ int main(int argc, char **argv)
 	// Directory access
 	FuseCallbacks.mkdir = [](const char *path, mode_t mode)
 	{
-		std::unique_ptr<ShareFile> File = Core->Create(path, false,
-			mode & ST_IRUSR, mode & ST_IWUSR, mode & ST_IXUSR,
-			mode & ST_IRGRP, mode & ST_IWGRP, mode & ST_IXGRP,
-			mode & ST_IROTH, mode & ST_IWOTH, mode & ST_IXOTH);
-		if (!File) return -EEXIST;
+		try
+		{
+			Core->Create(path, false,
+				mode & ST_IRUSR, mode & ST_IWUSR, mode & ST_IXUSR,
+				mode & ST_IRGRP, mode & ST_IWGRP, mode & ST_IXGRP,
+				mode & ST_IROTH, mode & ST_IWOTH, mode & ST_IXOTH);
+		}
+		catch (ActionError &Error)
+		{
+			switch (Error.Value)
+			{
+				case ActionError::Unknown: return -EEXIST;
+				default: assert(false);
+			}
+		}
 		return 0;
 	};
 
