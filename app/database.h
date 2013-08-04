@@ -12,7 +12,7 @@ template <typename DataType> struct Optional
 
 struct SQLDatabase
 {
-	SQLDatabase(bfs::path const &Path);
+	SQLDatabase(bfs::path const &Path = bfs::path());
 	~SQLDatabase(void);
 
 	template <typename Signature> struct Statement;

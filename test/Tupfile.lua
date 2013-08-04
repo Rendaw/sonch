@@ -5,7 +5,16 @@ ProtocolTest = Define.Executable
 	Name = 'protocol', 
 	Sources = Item 'protocol.cxx'
 }
---Define.Test { Executable = ProtocolTest }
+Define.Test { Executable = ProtocolTest }
+
+DatabaseTest = Database.Executable
+{
+	Name = 'database',
+	Sources = Item 'database.cxx',
+	Objects = DatabaseObject,
+	LinkFlags = '-lsqlite3'
+}
+Define.Test { Executable = DatabaseTest }
 
 FSBasicsTest = Define.Executable
 {
