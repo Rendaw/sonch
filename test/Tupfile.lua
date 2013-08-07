@@ -16,6 +16,13 @@ DatabaseTest = Define.Executable
 }
 Define.Test { Executable = DatabaseTest }
 
+TransactionTest = Define.Executable
+{
+	Name = 'transaction',
+	Sources = Item 'transaction.cxx'
+}
+Define.Test { Executable = TransactionTest }
+
 FSBasicsTest = Define.Executable
 {
 	Name = 'fsbasics',

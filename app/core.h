@@ -12,6 +12,9 @@
 // Test core
 // 
 
+#define App "sonch"
+typedef uint64_t UUID;
+
 struct ActionError
 {
 	enum CodeType

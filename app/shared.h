@@ -1,13 +1,14 @@
 #ifndef shared_h
 #define shared_h
 
-#define App "sonch"
-typedef uint64_t UUID;
-
-struct StringStream : std::stringstream
+struct String
 {
-	using std::stringstream::stringstream;
-	operator std::string(void) { return str(); }
+	String(void) {}
+	template <typename Whatever> String &operator <<(Whatever const &Input) { Buffer << Input; return *this; }
+	operator std::string(void) const { return Buffer.str(); }
+
+	private:
+		std::stringstream Buffer;
 };
 
 #endif

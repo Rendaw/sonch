@@ -252,6 +252,15 @@ template <typename LogType> class Reader
 			}
 			return Versions[VersionID][MessageID]->Read(Log, VersionID, MessageID, Buffer);
 		}
+		
+		template <typename MessageType, typename ...ArgumentTypes> void Call(ArgumentTypes &&...Arguments)
+		{
+			assert(MessageType::Version::ID < Versions.size());
+			assert(MessageType::ID < Versions[MessageType::Version::ID].size());
+			auto &Callback = *reinterpret_cast<std::function<MessageType::Signature> *>(
+				Versions[MessageType::Version::ID][MessageType::ID]->GetCallback());
+		}
+
 	private:
 		LogType &Log;
 		BufferType Buffer;
@@ -260,6 +269,7 @@ template <typename LogType> class Reader
 		{
 			virtual ~MessageReader(void) {}
 			virtual bool Read(LogType &Log, VersionIDType const &VersionID, MessageIDType const &MessageID, BufferType const &Buffer) = 0;
+			virtual void *GetCallback(void) = 0; // Don't care no more
 		};
 
 		template <typename... Definition> struct MessageReaderImplementation : MessageReader
@@ -375,6 +385,8 @@ template <typename LogType> class Reader
 					ReadSingle(Log, VersionID, MessageID, Buffer, Offset, Data[ElementIndex]);
 				return true;
 			}
+			
+			void *GetCallback(void) { return &Callback; }
 		};
 
 		std::vector<std::vector<std::unique_ptr<MessageReader>>> Versions;
