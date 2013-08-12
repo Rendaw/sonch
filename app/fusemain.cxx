@@ -1,6 +1,7 @@
 #include "log.h"
 #include "shared.h"
 #include "protocol.h"
+#include "core.h"
 
 #include <string>
 #include <memory>
@@ -26,7 +27,7 @@ static std::unique_ptr<ShareCore> Core;
 
 void ExportAttributes(ShareFile &File, stat *Output)
 {
-	Output->st_mode = 
+	Output->st_mode =
 		(File->Misc.IsFile ? ST_IFREG : ST_IFDIR) |
 		(File->Misc.OwnerRead ? ST_IRUSR : 0) |
 		(File->Misc.OwnerWrite ? ST_IWUSR : 0) |
@@ -46,27 +47,27 @@ void ExportAttributes(ShareFile &File, stat *Output)
 
 bool CanRead(ShareFile const &File)
 {
-	return  
+	return
 		(File.Misc.OwnerRead && (Core->GetUID() == fuse_get_context()->uid)) ||
 		(File.Misc.GroupRead && (Core->GetGID() == fuse_get_context()->gid)) ||
 		(File.Misc.OtherRead);
-} 
+}
 
 bool CanWrite(ShareFile const &File)
 {
-	return  
+	return
 		(File.Misc.OwnerWrite && (Core->GetUID() == fuse_get_context()->uid)) ||
 		(File.Misc.GroupWrite && (Core->GetGID() == fuse_get_context()->gid)) ||
 		(File.Misc.OtherWrite);
-} 
+}
 
 bool CanExecute(ShareFile const &File)
 {
-	return  
+	return
 		(File.Misc.OwnerExecute && (Core->GetUID() == fuse_get_context()->uid)) ||
 		(File.Misc.GroupExecute && (Core->GetGID() == fuse_get_context()->gid)) ||
 		(File.Misc.OtherExecute);
-} 
+}
 
 struct FileContext
 {
@@ -91,19 +92,19 @@ int main(int argc, char **argv)
 			"\tMounts " App " share LOCATION at MOUNTPOINT.  If LOCATION does not exist, creates a new share with NAME.");
 		return 0;
 	}
-	
+
 	PreinitContext.RootPath = argv[1];
 	if (argc >= 3) PreinitContext.InstanceName = argv[3];
 
 	fuse_operations FuseCallbacks{0};
-	
+
 	// Disabled
 	/*FuseCallbacks.link = [](const char *from, const char *to) { return -EPERM; };
 	FuseCallbacks.symlink = [](const char *from, const char *to) { return -EPERM; };
 	FuseCallbacks.readlink = [](const char *path, char *buf, size_t size) { return -EINVAL; };
 	FuseCallbacks.mknod = [](const char *, mode_t mode, dev_t) { return -EPERM; };
 	FuseCallbacks.chown = [](const char *path, uid_t uid, gid_t gid) { return -EPERM; };
-	
+
 	FuseCallbacks.setxattr = [](const char *path, const char *name, const char *value, size_t size, int flags)
 		{ return -EPERM; };
 
@@ -195,7 +196,7 @@ int main(int argc, char **argv)
 	{
 		std::unique_ptr<ShareFile> File = Core->Get(path);
 		if (!File) return -ENOENT;
-		Core->SetPermissions(File, 
+		Core->SetPermissions(File,
 			mode & ST_IRUSR,
 			mode & ST_IWUSR,
 			mode & ST_IXUSR,
@@ -207,7 +208,7 @@ int main(int argc, char **argv)
 			mode & ST_IXOTH);
 		return 0;
 	};
-	
+
 	FuseCallbacks.utimens = [](const char *path, const struct timespec ts[2])
 	{
 		std::unique_ptr<ShareFile> File = Core->Get(path);
@@ -307,7 +308,7 @@ int main(int argc, char **argv)
 		fi->fh = fd;
 		return 0;
 	};
-	
+
 	FuseCallbacks.open = [](const char *path, struct fuse_file_info *fi)
 	{
 		ShareFile *Core->Get(path).release();
@@ -318,14 +319,14 @@ int main(int argc, char **argv)
 		return 0;
 	};
 
-	
+
 	FuseCallbacks.truncate = [](const char *path, off_t size)
 	{
 		int Result = truncate(Core->TranslatePath(path).c_str(), size);
 		if (Result == -1) return -errno;
 		return 0;
 	};
-	
+
 	FuseCallbacks.ftruncate = [](const char *, off_t size, struct fuse_file_info *fi)
 	{
 		int Result = ftruncate(fi->fh, size);
@@ -379,7 +380,7 @@ int main(int argc, char **argv)
 	fuse_opt_add_arg(&FuseArgs, argv[0]);
 	fuse_opt_add_arg(&FuseArgs, argv[2]);
 	fuse_opt_add_arg(&FuseArgs, "-d");
-     
+
 	return fuse_main(FuseArgs.argc, FuseArgs.argv, &FuseCallbacks, nullptr);
 }
 

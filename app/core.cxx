@@ -3,7 +3,11 @@
 #define SplitDir "splits"
 #define HostInstanceIndex 0
 #define NullIndex
-	
+
+DefineProtocol(StaticDataProtocol);
+DefineProtocolVersion(StaticDataV1, StaticDataProtocol);
+DefineProtocolMesssage(StaticDataV1All, StaticDataV1, void(std::string InstanceName, UUID InstanceUUID));
+
 CoreDatabase::CoreDatabase(bfs::path const &DatabasePath, bool Create, std::string const &InstanceName, UUID const &InstanceID)
 {
 	if (Create)
@@ -29,7 +33,7 @@ CoreDatabase::CoreDatabase(bfs::path const &DatabasePath, bool Create, std::stri
 		")");
 		Execute("INSERT INTO \"Instances\" (\"ID\", \"Name\") VALUES (?, ?)", InstanceName, InstanceID);
 	}
-	
+
 	Begin = Prepare<void(void)>("BEGIN");
 	End = Prepare<void(void)>("COMMIT");
 
@@ -109,6 +113,38 @@ CoreDatabase::CoreDatabase(bfs::path const &DatabasePath, bool Create, std::stri
 		("INSERT OR IGNORE INTO \"Ancestry\" VALUES (?, ?, ?, ?)");
 }
 
+CoreTransactor::CoreTransactor(std::mutex &CoreMutex) :
+	Transactor(CoreMutex, Create, SetPermissions, SetTimestamp, Delete, Move),
+	Create([this](
+		UUID const &FileIndex,
+		ShareFile const &Parent, std::string const &Name, bool const &IsFile,
+		bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
+		bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
+		bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute)
+	{
+		if (Get(Path)) return;
+		uint64_t Time = std::time();
+		FilePermissions Permissions{
+			OwnerRead, OwnerWrite, OwnerExecute,
+			GroupRead, GroupWrite, GroupExecute,
+			OtherRead, OtherWrite, OtherExecute};
+		Statement.CreateFile(HostInstanceIndex, FileIndex, Parent.Instance, Parent.ID, Name, Time, IsFile, Permissions);
+		if (IsFile)
+		{
+			auto const InternalFilename = FilePath / GetInternalFilename(
+				NodeID{HostInstanceIndex, FileIndex},
+				NodeID{HostInstanceIndex, NullIndex});
+			bfs::ofstream Out(InternalFilename, std::ofstream::out | std::ofstream::binary);
+			if (!Out) throw ActionError{ActionError::Unknown};
+		}
+	}),
+	SetPermissions(),
+	SetTimestamp(),
+	Delete(),
+	Move()
+{
+}
+
 static std::string GetInternalFilename(NodeID const &ID, NodeID const &Change)
 	{ return String() << ID.Instance << "-" ID.Index << "-" << Change.Instance << "-" << Change.Index; }
 
@@ -149,10 +185,6 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 
 	try
 	{
-		typedef ProtocolClass StaticDataProtocol;
-		typedef ProtocolMessageClass<ProtocolVersionClass<StaticDataProtocol>, 
-			void(std::string InstanceName, UUID InstanceUUID)> StaticDataV1;
-
 		bfs::path const DatabasePath = RootPath / "." App / "database";
 		enum DatabaseVersion()
 		{
@@ -160,7 +192,7 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			End,
 			Latest = End - 1
 		};
-			
+
 		bfs::path const TransactionPath = RootPath / "." App / "transactions";
 
 		FilePath = RootPath / "." App / "files";
@@ -176,7 +208,7 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 
 			auto RandomGenerator = std::mt19937_64{std::random_device{}()};
 			InstanceID = std::uniform_int_distribution<UUID>()(RandomGenerator);
-			
+
 			InstanceFilename = GetInstanceFilename(InstanceName, InstanceID);
 
 			// Prepare the base file hierarchy
@@ -189,7 +221,7 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 				bfs::path StaticDataPath = RootPath / "." App / "static";
 				bfs::ofstream Out(StaticDataPath, std::ofstream::out | std::ofstream::binary);
 				if (!Out) throw SystemError() << "Could not create file '" << StaticDataPath << "'.";
-				auto const &Data = StaticDataV1::Write(InstanceName, InstanceID);
+				auto const &Data = StaticDataV1All::Write(InstanceName, InstanceID);
 				Out.write((char const *)&Data[0], Data.size());
 			}
 
@@ -211,8 +243,8 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 
 			// Load static data
 			bfs::ifstream In(RootPath / "." App / "static", std::ifstream::in | std::ifstream::binary);
-			Protocol::Reader<StandardOutLog> Reader(Log);
-			Reader.Add<StaticDataV1>([&](std::string &ReadInstanceName, UUID &ReadInstanceUUID) 
+			Protocol::Reader<StandardOutLog, StaticDataV1All> Reader(Log,
+			[&](std::string &ReadInstanceName, UUID &ReadInstanceUUID)
 			{
 				InstanceName = ReadInstanceName;
 				InstanceID = ReadInstanceUUID;
@@ -220,7 +252,7 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			bool Success = Reader.Read(In);
 			if (!Success)
 				throw SystemError() << "Could not read static data, file may be corrupt.";
-			
+
 			InstanceFilename = GetInstanceFilename(InstanceName, InstanceID);
 
 			Database.reset(new CoreDatabase(DatabasePath, false));
@@ -252,13 +284,13 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			if (IsFile)
 			{
 				auto const InternalFilename = FilePath / GetInternalFilename(
-					NodeID{HostInstanceIndex, FileIndex}, 
+					NodeID{HostInstanceIndex, FileIndex},
 					NodeID{HostInstanceIndex, NullIndex});
 				bfs::ofstream Out(InternalFilename, std::ofstream::out | std::ofstream::binary);
 				if (!Out) throw ActionError{ActionError::Unknown};
 			}
 		};
-		
+
 		Transaction.SetPermissions = [this](
 			ShareFile const &File, UUID const &NewChangeIndex,
 			bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
@@ -271,16 +303,16 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 					OwnerRead, OwnerWrite, OwnerExecute,
 					GroupRead, GroupWrite, GroupExecute,
 					OtherRead, OtherWrite, OtherExecute},
-				File.ID().Instance, File.ID().Index, 
+				File.ID().Instance, File.ID().Index,
 				File.Change().Instance, File.Change().Index);
 			Statement.CreateChange(
-				File.Change().Instance, File.Change().Index, 
+				File.Change().Instance, File.Change().Index,
 				HostInstanceIndex, NewChangeIndex);
 			if (File.IsFile)
 				bfs::rename(FilePath / GetInternalFilename(File.ID(), File.Change()),
 					FilePath / GetInternalFilename(File.ID(), NodeID{HostInstanceIndex, NewChangeIndex}));
 		};
-		
+
 		Transaction.SetTimestamp = [this](
 			ShareFile const &File, UUID const &NewChangeIndex,
 			uint64_t const &Timestamp)
@@ -288,10 +320,10 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			Statement.SetTimestamp(
 				HostInstanceIndex, NewChangeIndex,
 				Timestamp,
-				File.ID().Instance, File.ID().Index, 
+				File.ID().Instance, File.ID().Index,
 				File.Change().Instance, File.Change().Index);
 			Statement.CreateChange(
-				File.Change().Instance, File.Change().Index, 
+				File.Change().Instance, File.Change().Index,
 				HostInstanceIndex, NewChangeIndex);
 			if (File.IsFile)
 				bfs::rename(FilePath / GetInternalFilename(File.ID(), File.Change()),
@@ -304,7 +336,7 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			if (File.IsFile)
 				bfs::remove(FilePath / GetInternalFilename(File.ID(), File.Change()));
 		};
-		
+
 		Transaction.Move = [this](
 			ShareFile const &File, UUID const &NewChangeIndex,
 			NodeID const &Parent,
@@ -312,10 +344,10 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 		{
 			Statement.MoveFile(
 				HostInstanceIndex, NewChangeIndex, Parent.Instance, Parent.Index, Name,
-				File.ID().Instance, File.ID().Index, 
+				File.ID().Instance, File.ID().Index,
 				File.Change().Instance, File.Change().Index);
 			Statement.CreateChange(
-				File.Change().Instance, File.Change().Index, 
+				File.Change().Instance, File.Change().Index,
 				HostInstanceIndex, NewChangeIndex);
 			if (File.IsFile)
 				bfs::rename(FilePath / GetInternalFilename(File.ID(), File.Change()),
@@ -369,7 +401,7 @@ ActionResult<std::unique_ptr<ShareFile>> ShareCore::Get(bfs::path const &Path)
 	for (; PathIndex + 1 < Path.size(); ++PathIndex)
 	{
 		ParentFile = Database.GetFile(ParentFile, Path[PathIndex]);
-		if (!ParentFile) 
+		if (!ParentFile)
 			return ActionError::Missing;
 		if (ParentFile.IsFile)
 			return ActionError::Invalid;
@@ -377,7 +409,7 @@ ActionResult<std::unique_ptr<ShareFile>> ShareCore::Get(bfs::path const &Path)
 			return ActionError::Missing;
 	}
 
-	auto Out = (SplitInstance == 0) ? 
+	auto Out = (SplitInstance == 0) ?
 		Database.GetFile(ParentFile, Path[PathIndex]) :
 		Database.GetSplitFile(ParentFile, SplitIndex, Path[PathIndex]);
 	if (!Out) return ActionError::Missing;
@@ -389,12 +421,12 @@ std::vector<std::unique_ptr<ShareFile>> ShareCore::GetChildren(ShareFile const &
 	std::vector<std::unique_ptr<ShareFile>> Out;
 	if (File.IsSplit) Database.GetSplitFilesByParent.Execute(File.ID, File.Change.Instance, From, Count,
 		[&Out](
-			Counter &IDInstance, UUID &IDIndex, 
-			Counter &ChangeInstance, UUID &ChangeIndex, 
-			Counter &ParentInstance, UUID &ParentIndex, 
-			std::string &Name, bool &IsFile, Timestamp &Modified, 
+			Counter &IDInstance, UUID &IDIndex,
+			Counter &ChangeInstance, UUID &ChangeIndex,
+			Counter &ParentInstance, UUID &ParentIndex,
+			std::string &Name, bool &IsFile, Timestamp &Modified,
 			SharePermissions &Permissions, bool IsSplit)
-		{ 
+		{
 			Out.push_back(new ShareFile{
 				NodeID{IDInstance, IDIndex},
 				NodeID{ChangeInstance, ChangeIndex},
@@ -403,12 +435,12 @@ std::vector<std::unique_ptr<ShareFile>> ShareCore::GetChildren(ShareFile const &
 		});
 	else Database.GetFilesByParent.Execute(File.ID, From, Count,
 		[&Out](
-			Counter &IDInstance, UUID &IDIndex, 
-			Counter &ChangeInstance, UUID &ChangeIndex, 
-			Counter &ParentInstance, UUID &ParentIndex, 
-			std::string &Name, bool &IsFile, Timestamp &Modified, 
+			Counter &IDInstance, UUID &IDIndex,
+			Counter &ChangeInstance, UUID &ChangeIndex,
+			Counter &ParentInstance, UUID &ParentIndex,
+			std::string &Name, bool &IsFile, Timestamp &Modified,
 			SharePermissions &Permissions, bool IsSplit)
-		{ 
+		{
 			Out.push_back(new ShareFile{
 				NodeID{IDInstance, IDIndex},
 				NodeID{ChangeInstance, ChangeIndex},
@@ -419,7 +451,7 @@ std::vector<std::unique_ptr<ShareFile>> ShareCore::GetChildren(ShareFile const &
 	return Out;
 }
 
-std::unique_ptr<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile, 
+std::unique_ptr<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile,
 	bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
 	bool GroupRead, bool GroupWrite, bool GroupExecute,
 	bool OtherRead, bool OtherWrite, bool OtherExecute)
@@ -431,14 +463,14 @@ std::unique_ptr<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile,
 	auto Parent = Get(Path.parent());
 	if (!Parent) throw ActionError{ActionError::Missing};
 	if (Parent->IsFile) throw ActionError{ActionError::Invalid};
-	Transact(Transaction.Create, 
+	Transact(Transaction.Create,
 		FileIndex, Parent, Path.file(), IsFile,
 		OwnerRead, OwnerWrite, OwnerExecute,
 		GroupRead, GroupWrite, GroupExecute,
 		OtherRead, OtherWrite, OtherExecute);
 }
 
-void ShareCore::SetPermissions(ShareFile const &File, 
+void ShareCore::SetPermissions(ShareFile const &File,
 	bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
 	bool GroupRead, bool GroupWrite, bool GroupExecute,
 	bool OtherRead, bool OtherWrite, bool OtherExecute)
@@ -447,8 +479,8 @@ void ShareCore::SetPermissions(ShareFile const &File,
 	uint64_t ChangeIndex = Database.GetChangeIndex();
 	Database.IncrementChangeIndex();
 	Database.End();
-	Transact(Transaction.SetPermissions, 
-		File.Instance, File.ID, ChangeIndex, 
+	Transact(Transaction.SetPermissions,
+		File.Instance, File.ID, ChangeIndex,
 		OwnerRead, OwnerWrite, OwnerExecute,
 		GroupRead, GroupWrite, GroupExecute,
 		OtherRead, OtherWrite, OtherExecute);
@@ -460,8 +492,8 @@ void ShareCore::SetTimestamp(ShareFile const &File, unsigned int Timestamp)
 	uint64_t ChangeIndex = Database.GetChangeIndex();
 	Database.IncrementChangeIndex();
 	Database.End();
-	Transact(Transaction.SetTimestamp, 
-		File.Instance, File.ID, ChangeIndex, 
+	Transact(Transaction.SetTimestamp,
+		File.Instance, File.ID, ChangeIndex,
 		Timestamp);
 }
 

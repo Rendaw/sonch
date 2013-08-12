@@ -19,17 +19,18 @@ Define.Test { Executable = DatabaseTest }
 TransactionTest = Define.Executable
 {
 	Name = 'transaction',
-	Sources = Item 'transaction.cxx'
+	Sources = Item 'transaction.cxx',
+	LinkFlags = '-lboost_system -lboost_filesystem'
 }
 Define.Test { Executable = TransactionTest }
 
-FSBasicsTest = Define.Executable
+--[[FSBasicsTest = Define.Executable
 {
 	Name = 'fsbasics',
 	Sources = Item 'fsbasics.cxx',
 	LinkFlags = '-lboost_system -lboost_filesystem'
 }
---[[Define.Test
+Define.Test
 {
 	Executable = FSBasicsTest,
 	Inputs = FuseApp,
