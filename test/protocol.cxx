@@ -68,6 +68,10 @@ DefineProtocolMessage(Proto1_2_4, Proto1_2, void(bool Space, bool Val));
 DefineProtocolMessage(Proto1_2_5, Proto1_2, void(bool Space, std::string Val));
 DefineProtocolMessage(Proto1_2_6, Proto1_2, void(bool Space, std::vector<uint8_t> Val));
 
+DefineProtocol(Proto2);
+DefineProtocolVersion(Proto2_1, Proto2);
+DefineProtocolMessage(Proto2_1_1, Proto2_1, void(int Val));
+
 template<size_t Value> struct Overflow : std::integral_constant<size_t, Value + std::numeric_limits<unsigned char>::max() + 1> {};
 static_assert(Proto1_1::ID == 0, "ID calculation failed");
 static_assert(Proto1_1_1::ID == 0, "ID calculation failed");
@@ -172,7 +176,7 @@ int main(int argc, char **argv)
 	assert(Reader1.Read(BufferStream{Buffer}));
 
 	Buffer = Proto1_1_4::Write(true);
-	AssertEquals(Buffer, std::vector<uint8_t>({0x00, 0x03, 0x01, 0x00, 0x01, }));
+	AssertEquals(Buffer, std::vector<uint8_t>({0x00, 0x03, 0x01, 0x00, 0x01}));
 	assert(Reader1.Read(BufferStream{Buffer}));
 
 	Buffer = Proto1_1_5::Write("dog");
@@ -218,6 +222,13 @@ int main(int argc, char **argv)
 	Buffer = Proto1_2_6::Write(true, std::vector<uint8_t>());
 	AssertEquals(Buffer, std::vector<uint8_t>({0x01, 0x05, 0x03, 0x00, 0x01, 0x00, 0x00}));
 	assert(Reader2.Read(BufferStream{Buffer}));
+
+	// Proto 2_1
+	int Mutate = 0;
+	Buffer = Proto2_1_1::Write(45);
+	Protocol::Reader<StandardOutLog, Proto2_1_1> Reader3(Log, [&](int const &Val) { Mutate = Val; });
+	assert(Reader3.Read(BufferStream{Buffer}));
+	assert(Mutate == 45);
 
 	return 0;
 }

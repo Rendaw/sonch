@@ -1,14 +1,24 @@
 #include "core.h"
 
+#include <boost/filesystem.hpp>
+#include <boost/filesystem/fstream.hpp>
+
 #define SplitDir "splits"
 #define HostInstanceIndex 0
 #define NullIndex
 
 DefineProtocol(StaticDataProtocol);
 DefineProtocolVersion(StaticDataV1, StaticDataProtocol);
-DefineProtocolMesssage(StaticDataV1All, StaticDataV1, void(std::string InstanceName, UUID InstanceUUID));
+DefineProtocolMessage(StaticDataV1All, StaticDataV1, void(std::string InstanceName, UUID InstanceUUID));
 
-CoreDatabase::CoreDatabase(bfs::path const &DatabasePath, bool Create, std::string const &InstanceName, UUID const &InstanceID)
+enum class DatabaseVersion : unsigned int
+{
+	V1 = 0,
+	End,
+	Latest = End - 1
+};
+
+CoreDatabaseStructure::CoreDatabaseStructure(bfs::path const &DatabasePath, bool Create, std::string const &InstanceName, UUID const &InstanceID)
 {
 	if (Create)
 	{
@@ -16,43 +26,32 @@ CoreDatabase::CoreDatabase(bfs::path const &DatabasePath, bool Create, std::stri
 		"("
 			"\"Version\" INTEGER"
 		")");
-		Execute("INSERT INTO \"Stats\" VALUES (?)", DatabaseVersion::Latest);
-	}
+		Execute("INSERT INTO \"Stats\" VALUES (?)", (unsigned int)DatabaseVersion::Latest);
 
-	if (Create)
-	{
 		Execute("CREATE TABLE \"Instances\" "
 		"("
 			"\"Index\" INTEGER PRIMARY KEY AUTOINCREMENT, "
 			"\"ID\" INTEGER, "
-			"\"Name\" VARCHAR"
+			"\"Name\" VARCHAR, "
+			"\"Filename\" VARCHAR"
 		")");
-		Execute("CREATE INDEX \"IDIndex\" ON \"Instances\" "
+		/*Execute("CREATE INDEX \"IDIndex\" ON \"Instances\" "
 		"("
 			"\"ID\" ASC"
+		")");*/
+		Execute("CREATE INDEX \"FilenameIndex\" ON \"Instances\" "
+		"("
+			"\"Filename\" ASC"
 		")");
-		Execute("INSERT INTO \"Instances\" (\"ID\", \"Name\") VALUES (?, ?)", InstanceName, InstanceID);
-	}
+		Execute("INSERT INTO \"Instances\" (\"ID\", \"Name\", \"Filename\") VALUES (?, ?, ?)", InstanceName, InstanceName, InstanceID);
 
-	Begin = Prepare<void(void)>("BEGIN");
-	End = Prepare<void(void)>("COMMIT");
-
-	if (Create)
-	{
 		Execute("CREATE TABLE \"Counters\" "
 		"("
 			"\"File\" INTEGER , "
-			"\"Change\" INTEGER , "
+			"\"Change\" INTEGER"
 		")");
 		Execute("INSERT INTO \"Counters\" VALUES (?, ?)", NullIndex + 1, NullIndex + 1);
-	}
-	GetFileCounter = Prepare<UUID(void)>("SELECT \"File\" FROM \"Counters\"");
-	IncrementFileCounter = Prepare<void(void)>("UPDATE \"Counters\" SET \"File\" = \"File\" + 1");
-	GetChangeCounter = Prepare<UUID(void)>("SELECT \"Change\" FROM \"Counters\"");
-	IncrementChangeCounter = Prepare<void(void)>("UPDATE \"Counters\" SET \"Change\" = \"Change\" + 1");
 
-	if (Create)
-	{
 		Execute("CREATE TABLE \"Files\" "
 		"("
 			"\"IDInstance\" INTEGER , "
@@ -66,90 +65,69 @@ CoreDatabase::CoreDatabase(bfs::path const &DatabasePath, bool Create, std::stri
 			"\"Modified\" DATETIME , "
 			"\"Permissions\" BLOB , "
 			"\"IsSplit\" BOOLEAN , "
-			"PRIMARY KEY (\"Instance\", \"ID\")"
+			"PRIMARY KEY (\"IDInstance\", \"IDIndex\")"
 		")");
 		Execute("CREATE INDEX \"ParentIndex\" ON \"Files\" "
 		"("
 			"\"ParentInstance\" ASC, "
-			"\"ParentID\" ASC, "
+			"\"ParentIndex\" ASC, "
 			"\"Name\" ASC"
 		")");
-	}
-	GetFileByID = Prepare<ShareFileTuple(Counter IDInstance, UUID IDIndex)>>
-		("SELECT FROM \"Files\" WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"IsSplit\" = 0 LIMIT 1");
-	GetFile = Prepare<ShareFileTuple(Counter ParentInstance, UUID ParentIndex, std::string Name)>>
-		("SELECT FROM \"Files\" WHERE \"ParentInstance\" = ? AND \"ParentIndex\" = ? AND \"IsSplit\" = 0 AND \"Name\" = ? LIMIT 1");
-	GetSplitFile = Prepare<ShareFileTuple(Counter ParentInstance, UUID ParentIndex, Counter SplitInstance, std::string Name)>>
-		("SELECT FROM \"Files\" WHERE \"ParentInstance\" = ? AND \"ParentIndex\" = ? AND \"IsSplit\" = 1 AND \"ChangeInstance\" = ? AND \"Name\" = ? LIMIT 1");
-	GetFiles = Prepare<ShareFileTuple(Counter ParentInstance, UUID ParentIndex, Counter Offset, Counter Limit)>>
-		("SELECT FROM \"Files\" WHERE \"ParentInstance\" = ? AND \"ParentIndex\" = ? AND \"IsSplit\" = 0 OFFSET ? LIMIT ?");
-	GetSplitFiles = Prepare<ShareFileTuple(Counter ParentInstance, UUID ParentIndex, Counter SplitInstance, Counter Offset, Counter Limit)>>
-		("SELECT FROM \"Files\" WHERE \"ParentInstance\" = ? AND \"ParentIndex\" = ? AND \"IsSplit\" = 0 AND \"ChangeInstance\" = ? OFFSET ? LIMIT ?");
-	CreateFile = Prepare<void(Counter, UUID, Counter, UUID, std::string, bool, Timestamp, SharePermissions)>
-		("INSERT OR IGNORE INTO \"Files\" VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, 0);");
-	DeleteFile = Prepare<void(Counter, UUID, Counter, UUID)>
-		("DELETE FROM \"Files\" WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"ChangeInstance\" = ? AND \"ChangeIndex\" = ?");
-	SetPermissions = Prepare<void(SharePermissionsin Counter, UUID, Counter, UUID, Counter, UUID)>
-		("UPDATE \"Files\" SET \"ChangeInstance\" = ?, \"ChangeIndex\" = ?, \"Permissions\" = ? WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"ChangeInstance\" = ? AND \"ChangeIndex\" = ?");
-	SetTimestamp = Prepare<void(Counter, UUID, Timestamp, Counter, UUID, Counter, UUID)>
-		("UPDATE \"Files\" SET \"ChangeInstance\" = ?, \"ChangeIndex\" = ?, \"Modified\" = ? WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"ChangeInstance\" = ? AND \"ChangeIndex\" = ?");
-	MoveFile = Prepare<void(Counter, UUID, Counter, UUID, std::string, Counter, UUID, Counter, UUID)>
-		("UPDATE \"Files\" SET \"ChangeInstance\" = ?, \"ChangeIndex\" = ?, \"ParentInstance\" = ?, \"ParentIndex\" = ?, \"Name\" = ?, WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"ChangeInstance\" = ? AND \"ChangeIndex\" = ?");
-	if (Create)
-		CreateFile(HostInstanceIndex, NullIndex, HostInstanceIndex, NullIndex, HostInstanceIndex, NullIndex, "", std::time(), false, SharePermissions{1, 1, 1, 1, 0, 1, 1, 0, 1});
 
-	if (Create)
-	{
 		Execute("CREATE TABLE \"Ancestry\" "
 		"("
 			"\"IDInstance\" INTEGER , "
 			"\"IDIndex\" INTEGER , "
 			"\"ParentInstance\" INTEGER , "
 			"\"ParentIndex\" INTEGER , "
-			"PRIMARY KEY (\"Instance\", \"ID\")"
+			"PRIMARY KEY (\"IDInstance\", \"IDIndex\")"
 		")");
 	}
-	CreateChange = Prepare<void(Counter, UUID, Counter, UUID)>
-		("INSERT OR IGNORE INTO \"Ancestry\" VALUES (?, ?, ?, ?)");
 }
 
-CoreTransactor::CoreTransactor(std::mutex &CoreMutex) :
-	Transactor(CoreMutex, Create, SetPermissions, SetTimestamp, Delete, Move),
-	Create([this](
-		UUID const &FileIndex,
-		ShareFile const &Parent, std::string const &Name, bool const &IsFile,
-		bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
-		bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
-		bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute)
-	{
-		if (Get(Path)) return;
-		uint64_t Time = std::time();
-		FilePermissions Permissions{
-			OwnerRead, OwnerWrite, OwnerExecute,
-			GroupRead, GroupWrite, GroupExecute,
-			OtherRead, OtherWrite, OtherExecute};
-		Statement.CreateFile(HostInstanceIndex, FileIndex, Parent.Instance, Parent.ID, Name, Time, IsFile, Permissions);
-		if (IsFile)
-		{
-			auto const InternalFilename = FilePath / GetInternalFilename(
-				NodeID{HostInstanceIndex, FileIndex},
-				NodeID{HostInstanceIndex, NullIndex});
-			bfs::ofstream Out(InternalFilename, std::ofstream::out | std::ofstream::binary);
-			if (!Out) throw ActionError{ActionError::Unknown};
-		}
-	}),
-	SetPermissions(),
-	SetTimestamp(),
-	Delete(),
-	Move()
+CoreDatabase::CoreDatabase(bfs::path const &DatabasePath, bool Create, std::string const &InstanceName, UUID const &InstanceID) :
+	CoreDatabaseStructure(DatabasePath, Create, InstanceName, InstanceID),
+	Begin(Prepare<void(void)>("BEGIN")),
+	End(Prepare<void(void)>("COMMIT")),
+	GetFileIndex(Prepare<UUID(void)>("SELECT \"File\" FROM \"Counters\"")),
+	IncrementFileIndex(Prepare<void(void)>("UPDATE \"Counters\" SET \"File\" = \"File\" + 1")),
+	GetChangeIndex(Prepare<UUID(void)>("SELECT \"Change\" FROM \"Counters\"")),
+	IncrementChangeIndex(Prepare<void(void)>("UPDATE \"Counters\" SET \"Change\" = \"Change\" + 1")),
+	GetInstanceIndex(Prepare<Counter(std::string Filename)>("SELECT \"Index\" FROM \"Instances\" WHERE \"Filename\" = ?")),
+	GetFileByID(Prepare<ShareFileTuple(NodeID ID)>
+		("SELECT * FROM \"Files\" WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"IsSplit\" = 0 LIMIT 1")),
+	GetFile(Prepare<ShareFileTuple(NodeID Parent, std::string Name)>
+		("SELECT * FROM \"Files\" WHERE \"ParentInstance\" = ? AND \"ParentIndex\" = ? AND \"IsSplit\" = 0 AND \"Name\" = ? LIMIT 1")),
+	GetSplitFile(Prepare<ShareFileTuple(NodeID Parent, Counter SplitInstance, std::string Name)>
+		("SELECT * FROM \"Files\" WHERE \"ParentInstance\" = ? AND \"ParentIndex\" = ? AND \"IsSplit\" = 1 AND \"ChangeInstance\" = ? AND \"Name\" = ? LIMIT 1")),
+	GetFiles(Prepare<ShareFileTuple(NodeID Parent, Counter Offset, Counter Limit)>
+		("SELECT * FROM \"Files\" WHERE \"ParentInstance\" = ? AND \"ParentIndex\" = ? AND \"IsSplit\" = 0 LIMIT ?, ?")),
+	GetSplitFiles(Prepare<ShareFileTuple(NodeID Parent, Counter SplitInstance, Counter Offset, Counter Limit)>
+		("SELECT * FROM \"Files\" WHERE \"ParentInstance\" = ? AND \"ParentIndex\" = ? AND \"IsSplit\" = 0 AND \"ChangeInstance\" = ? LIMIT ?, ?")),
+	CreateFile(Prepare<void(NodeID ID, NodeID Parent, std::string Name, bool IsFile, Timestamp ModifiedTime, SharePermissions Permissions)>
+		("INSERT OR IGNORE INTO \"Files\" VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, 0)")),
+	DeleteFile(Prepare<void(NodeID ID, NodeID Change)>
+		("DELETE FROM \"Files\" WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"ChangeInstance\" = ? AND \"ChangeIndex\" = ?")),
+	SetPermissions(Prepare<void(NodeID NewChange, SharePermissions NewPermissions, NodeID ID, NodeID Change)>
+		("UPDATE \"Files\" SET \"ChangeInstance\" = ?, \"ChangeIndex\" = ?, \"Permissions\" = ? WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"ChangeInstance\" = ? AND \"ChangeIndex\" = ?")),
+	SetTimestamp(Prepare<void(NodeID NewChange, Timestamp NewModifiedTime, NodeID ID, NodeID Change)>
+		("UPDATE \"Files\" SET \"ChangeInstance\" = ?, \"ChangeIndex\" = ?, \"Modified\" = ? WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"ChangeInstance\" = ? AND \"ChangeIndex\" = ?")),
+	MoveFile(Prepare<void(NodeID NewChange, NodeID NewParent, std::string NewName, NodeID ID, NodeID Change)>
+		("UPDATE \"Files\" SET \"ChangeInstance\" = ?, \"ChangeIndex\" = ?, \"ParentInstance\" = ?, \"ParentIndex\" = ?, \"Name\" = ? WHERE \"IDInstance\" = ? AND \"IDIndex\" = ? AND \"ChangeInstance\" = ? AND \"ChangeIndex\" = ?")),
+	CreateChange(Prepare<void(NodeID NewChange, NodeID OldChange)>
+		("INSERT OR IGNORE INTO \"Ancestry\" VALUES (?, ?, ?, ?)"))
 {
+	if (Create)
+		CreateFile(NodeID(), NodeID(), "", std::time(nullptr), false, SharePermissions{1, 1, 1, 1, 0, 1, 1, 0, 1});
 }
 
 static std::string GetInternalFilename(NodeID const &ID, NodeID const &Change)
-	{ return String() << ID.Instance << "-" ID.Index << "-" << Change.Instance << "-" << Change.Index; }
+	{ return String() << ID.Instance << "-" << ID.Index << "-" << Change.Instance << "-" << Change.Index; }
 
-ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = std::string()) :
-	Root(Root), InstanceName(InstanceName)
+ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName) :
+	Root(Root), FilePath(Root / "." App / "files"),
+	InstanceName(InstanceName),
+	SplitFile(NodeID(), NodeID(), NodeID(), SplitDir, false, 0, SharePermissions{1, 1, 1, 1, 1, 1, 1, 1, 1}, false)
 {
 	auto const ValidateFilename = [](std::string const &Filename)
 	{
@@ -185,24 +163,16 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 
 	try
 	{
-		bfs::path const DatabasePath = RootPath / "." App / "database";
-		enum DatabaseVersion()
-		{
-			V1 = 0,
-			End,
-			Latest = End - 1
-		};
+		bfs::path const DatabasePath = Root / "." App / "database";
 
-		bfs::path const TransactionPath = RootPath / "." App / "transactions";
+		bfs::path const TransactionPath = Root / "." App / "transactions";
 
-		FilePath = RootPath / "." App / "files";
-
-		if (!bfs::exists(RootPath))
+		if (!bfs::exists(Root))
 		{
 			// Try to create an empty share, since the target didn't exist
 			// --
 			if (InstanceName.empty())
-				{ throw UserError() << "Share '" << RootPath.string() << "' does not exist.  Specify NAME to create a new share."; }
+				{ throw UserError() << "Share '" << Root.string() << "' does not exist.  Specify NAME to create a new share."; }
 			if (!ValidateFilename(InstanceName))
 				{ throw UserError() << "Instance NAME contains invalid characters."; }
 
@@ -212,13 +182,14 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			InstanceFilename = GetInstanceFilename(InstanceName, InstanceID);
 
 			// Prepare the base file hierarchy
-			bfs::create_directory(RootPath);
-			bfs::create_directory(RootPath / "." App);
+			bfs::create_directory(Root);
+			Log.reset(new FileLog(Root / "log.txt"));
+			bfs::create_directory(Root / "." App);
 			bfs::create_directory(FilePath);
 			bfs::create_directory(TransactionPath);
 
 			{
-				bfs::path StaticDataPath = RootPath / "." App / "static";
+				bfs::path StaticDataPath = Root / "." App / "static";
 				bfs::ofstream Out(StaticDataPath, std::ofstream::out | std::ofstream::binary);
 				if (!Out) throw SystemError() << "Could not create file '" << StaticDataPath << "'.";
 				auto const &Data = StaticDataV1All::Write(InstanceName, InstanceID);
@@ -226,66 +197,65 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			}
 
 			{
-				bfs::path ReadmePath = RootPath / App "-share-readme.txt";
+				bfs::path ReadmePath = Root / App "-share-readme.txt";
 				bfs::ofstream Out(ReadmePath);
 				if (!Out) throw SystemError() << "Could not create file '" << ReadmePath << "'.";
 				Out << "Do not modify the contents of this directory.\n\nThis directory is the unmounted data for a " App " share.  Modifying the contents could cause data corruption.  It is safe to move and change the ownership for this folder (but not it's permissions or contents)." << std::endl;
 			}
 
-			Database.reset(new CoreDatabase(DatabasePath, true));
+			Database.reset(new CoreDatabase(DatabasePath, true, InstanceName, InstanceID));
 		}
-		else
+		else if (bfs::is_directory(Root))
 		{
+			Log.reset(new FileLog(Root / "log.txt"));
+
 			// Share exists, restore state
 			// --
 			if (!InstanceName.empty())
-				Log.Warn() << "Share exists, ignoring all other arguments.";
+				Log->Warn() << "Share exists, ignoring all other arguments.";
 
 			// Load static data
-			bfs::ifstream In(RootPath / "." App / "static", std::ifstream::in | std::ifstream::binary);
-			Protocol::Reader<StandardOutLog, StaticDataV1All> Reader(Log,
-			[&](std::string &ReadInstanceName, UUID &ReadInstanceUUID)
-			{
-				InstanceName = ReadInstanceName;
-				InstanceID = ReadInstanceUUID;
-			});
+			bfs::ifstream In(Root / "." App / "static", std::ifstream::in | std::ifstream::binary);
+			Protocol::Reader<FileLog, StaticDataV1All> Reader(*Log,
+				[&](std::string const &ReadInstanceName, UUID const &ReadInstanceUUID)
+				{
+					this->InstanceName = ReadInstanceName;
+					this->InstanceID = ReadInstanceUUID;
+				});
 			bool Success = Reader.Read(In);
 			if (!Success)
 				throw SystemError() << "Could not read static data, file may be corrupt.";
 
 			InstanceFilename = GetInstanceFilename(InstanceName, InstanceID);
 
-			Database.reset(new CoreDatabase(DatabasePath, false));
-			unsigned int Version = Database->Get<unsigned int()>("SELECT \"Version\" FROM \"Stats\"");
+			Database.reset(new CoreDatabase(DatabasePath, false, InstanceName, InstanceID));
+			auto MaybeVersion = Database->Get<unsigned int()>("SELECT \"Version\" FROM \"Stats\"");
+			if (!MaybeVersion)
+				throw SystemError() << "Could not read database version, database may be corrupt.";
+			DatabaseVersion Version = (DatabaseVersion)*MaybeVersion;
 			switch (Version)
 			{
-				default: throw SystemError() << "Unrecognized database version " << Version;
-				/*case Last - 2...: Do upgrade to Last - 1;
-				case Last - 2...: Do upgrade to Last;*/
-				case Last: break;
+				default: throw SystemError() << "Unrecognized database version " << (unsigned int)Version;
+				/*case Last - 2...: Do upgrade to Last - 1 && log;
+				case Last - 2...: Do upgrade to Last && log;*/
+				case DatabaseVersion::Latest: break;
 			}
-			Database->Execute("UPDATE \"Stats\" SET \"Version\" = ?", DatabaseVersion::Latest);
+			Database->Execute("UPDATE \"Stats\" SET \"Version\" = ?", (unsigned int)DatabaseVersion::Latest);
 		}
+		else { throw UserError() << Root << " is a non-directory.  The root path must not exist or must have been previously created by " << App << "."; }
 
 		Transaction.Create = [this](
 			UUID const &FileIndex,
-			ShareFile const &Parent, std::string const &Name, bool const &IsFile,
-			bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
-			bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
-			bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute)
+			NodeID const &Parent, std::string const &Name, bool const &IsFile,
+			SharePermissions const &Permissions)
 		{
-			if (Get(Path)) return;
-			uint64_t Time = std::time();
-			FilePermissions Permissions{
-				OwnerRead, OwnerWrite, OwnerExecute,
-				GroupRead, GroupWrite, GroupExecute,
-				OtherRead, OtherWrite, OtherExecute};
-			Statement.CreateFile(HostInstanceIndex, FileIndex, Parent.Instance, Parent.ID, Name, Time, IsFile, Permissions);
+			uint64_t Time = std::time(nullptr);
+			Database->CreateFile({HostInstanceIndex, FileIndex}, Parent, Name, Time, IsFile, Permissions);
 			if (IsFile)
 			{
 				auto const InternalFilename = FilePath / GetInternalFilename(
-					NodeID{HostInstanceIndex, FileIndex},
-					NodeID{HostInstanceIndex, NullIndex});
+					{HostInstanceIndex, FileIndex},
+					{HostInstanceIndex, NullIndex});
 				bfs::ofstream Out(InternalFilename, std::ofstream::out | std::ofstream::binary);
 				if (!Out) throw ActionError{ActionError::Unknown};
 			}
@@ -297,43 +267,37 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
 			bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute)
 		{
-			Statement.SetPermissions(
-				HostInstanceIndex, NewChangeIndex,
-				Permissions{
+			Database->SetPermissions(
+				{HostInstanceIndex, NewChangeIndex},
+				SharePermissions{
 					OwnerRead, OwnerWrite, OwnerExecute,
 					GroupRead, GroupWrite, GroupExecute,
 					OtherRead, OtherWrite, OtherExecute},
-				File.ID().Instance, File.ID().Index,
-				File.Change().Instance, File.Change().Index);
-			Statement.CreateChange(
-				File.Change().Instance, File.Change().Index,
-				HostInstanceIndex, NewChangeIndex);
-			if (File.IsFile)
+				File.ID(), File.Change());
+			Database->CreateChange({HostInstanceIndex, NewChangeIndex}, File.Change());
+			if (File.IsFile())
 				bfs::rename(FilePath / GetInternalFilename(File.ID(), File.Change()),
-					FilePath / GetInternalFilename(File.ID(), NodeID{HostInstanceIndex, NewChangeIndex}));
+					FilePath / GetInternalFilename(File.ID(), {HostInstanceIndex, NewChangeIndex}));
 		};
 
 		Transaction.SetTimestamp = [this](
 			ShareFile const &File, UUID const &NewChangeIndex,
 			uint64_t const &Timestamp)
 		{
-			Statement.SetTimestamp(
-				HostInstanceIndex, NewChangeIndex,
+			Database->SetTimestamp(
+				{HostInstanceIndex, NewChangeIndex},
 				Timestamp,
-				File.ID().Instance, File.ID().Index,
-				File.Change().Instance, File.Change().Index);
-			Statement.CreateChange(
-				File.Change().Instance, File.Change().Index,
-				HostInstanceIndex, NewChangeIndex);
-			if (File.IsFile)
+				File.ID(), File.Change());
+			Database->CreateChange({HostInstanceIndex, NewChangeIndex}, File.Change());
+			if (File.IsFile())
 				bfs::rename(FilePath / GetInternalFilename(File.ID(), File.Change()),
-					FilePath / GetInternalFilename(File.ID(), NodeID{HostInstanceIndex, NewChangeIndex}));
+					FilePath / GetInternalFilename(File.ID(), {HostInstanceIndex, NewChangeIndex}));
 		};
 
 		Transaction.Delete = [this](ShareFile const &File)
 		{
-			Statement.DeleteFile(File.Instance, File.ID, File.ChangeInstance, File.ChangeIndex);
-			if (File.IsFile)
+			Database->DeleteFile(File.ID(), File.Change());
+			if (File.IsFile())
 				bfs::remove(FilePath / GetInternalFilename(File.ID(), File.Change()));
 		};
 
@@ -342,20 +306,17 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName = st
 			NodeID const &Parent,
 			std::string const &Name)
 		{
-			Statement.MoveFile(
-				HostInstanceIndex, NewChangeIndex, Parent.Instance, Parent.Index, Name,
-				File.ID().Instance, File.ID().Index,
-				File.Change().Instance, File.Change().Index);
-			Statement.CreateChange(
-				File.Change().Instance, File.Change().Index,
-				HostInstanceIndex, NewChangeIndex);
-			if (File.IsFile)
+			Database->MoveFile(
+				{HostInstanceIndex, NewChangeIndex}, Parent, Name,
+				File.ID(), File.Change());
+			Database->CreateChange({HostInstanceIndex, NewChangeIndex}, File.Change());
+			if (File.IsFile())
 				bfs::rename(FilePath / GetInternalFilename(File.ID(), File.Change()),
-					FilePath / GetInternalFilename(File.ID(), NodeID{HostInstanceIndex, NewChangeIndex}));
+					FilePath / GetInternalFilename(File.ID(), {HostInstanceIndex, NewChangeIndex}));
 		};
 
-		Transact.reset(new Transactor(Mutex, TransactionPath,
-			Transaction.CreateFile,
+		Transact.reset(new CoreTransactor(Mutex, TransactionPath,
+			Transaction.Create,
 			Transaction.SetPermissions,
 			Transaction.SetTimestamp,
 			Transaction.Delete,
@@ -371,103 +332,103 @@ unsigned int ShareCore::GetUser(void) const { return geteuid(); }
 
 unsigned int ShareCore::GetGroup(void) const { return geteuid(); }
 
-std::unique_ptr<ShareFile> ShareCore::Get(NodeID const &ID)
+bfs::path ShareCore::GetRealPath(ShareFile const &File) const
 {
-	// Get primary instance of file by file id
-	Optional<ShareFile> Got = Database.GetFileByID(ID.Instance, ID.Index);
-	if (!Got) return nullptr;
-	return new ShareFile(Got);
+	assert(File.IsFile());
+	return FilePath / GetInternalFilename(File.ID(), File.Change());
 }
 
-ActionResult<std::unique_ptr<ShareFile>> ShareCore::Get(bfs::path const &Path)
+GetResult ShareCore::Get(NodeID const &ID)
 {
-	Optional<ShareFile> ParentFile = Database.GetFile(NodeID{0, 0}, "");
-	assert(ParentFile);
-	if (Path.empty()) return new ShareFile(ParentFile);
+	// Get primary instance of file by file id
+	auto Got = Database->GetFileByID(ID);
+	if (!Got) return ActionError::Missing;
+	return {*Got};
+}
 
-	unsigned int PathIndex = 1;
+GetResult ShareCore::Get(bfs::path const &Path)
+{
+	auto ParentFile = Database->GetFile({0, 0}, "");
+	assert(ParentFile);
+	if (Path.empty()) return {ShareFile(*ParentFile)};
+
+	bfs::path::iterator PathIterator = Path.begin();
 	Counter SplitInstance = 0;
-	if ((Path.size() > 0) && (Path[0] == SplitPath))
+	if (*PathIterator == SplitDir)
 	{
-		if (Path.size() == 1) return new ShareFile(SplitFile);
-		auto SplitInstance = InstanceMap.find(Path[1]);
-		if (Instance != InstanceMap.end())
-			PathInstanceIndex = Instance->second;
-		if (!HasSplits(SplitInstance, ParentFile)) return ActionError::Missing;
-		if (Path.size() == 2) return new ShareFile(SplitInstanceFile(PathInstanceIndex));
-		PathIndex = 3;
+		if (++PathIterator == Path.end()) return SplitFile;
+		auto GotInstance = Database->GetInstanceIndex(PathIterator->string());
+		if (!GotInstance) return ActionError::Missing;
+		SplitInstance = *GotInstance;
+		return ActionError::Missing;
+		if (true /*!HasSplits(SplitInstance, ParentFile)*/) return ActionError::Missing;
+		if (++PathIterator == Path.end()) return SplitInstanceFile(SplitInstance);
 	}
 
-	for (; PathIndex + 1 < Path.size(); ++PathIndex)
 	{
-		ParentFile = Database.GetFile(ParentFile, Path[PathIndex]);
-		if (!ParentFile)
-			return ActionError::Missing;
-		if (ParentFile.IsFile)
-			return ActionError::Invalid;
-		if (!HasSplits(SplitInstance, ParentFile))
-			return ActionError::Missing;
+		bfs::path::iterator NextPathIterator = PathIterator; ++NextPathIterator;
+		for (; NextPathIterator != Path.end(); PathIterator = NextPathIterator, NextPathIterator++)
+		{
+			ParentFile = Database->GetFile(ShareFile(*ParentFile).ID(), PathIterator->string());
+			if (!ParentFile)
+				return ActionError::Missing;
+			if (ShareFile(*ParentFile).IsFile())
+				return ActionError::Invalid;
+			if (true /*!HasSplits(SplitInstance, ParentFile)*/)
+				return ActionError::Missing;
+		}
 	}
 
 	auto Out = (SplitInstance == 0) ?
-		Database.GetFile(ParentFile, Path[PathIndex]) :
-		Database.GetSplitFile(ParentFile, SplitIndex, Path[PathIndex]);
+		Database->GetFile(ShareFile(*ParentFile).ID(), PathIterator->string()) :
+		Database->GetSplitFile(ShareFile(*ParentFile).ID(), SplitInstance, PathIterator->string());
 	if (!Out) return ActionError::Missing;
-	return new ShareFile(Out);
+	return ShareFile(*Out);
 }
 
-std::vector<std::unique_ptr<ShareFile>> ShareCore::GetChildren(ShareFile const &File, unsigned int From, unsigned int Count)
+std::vector<ShareFile> ShareCore::GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count)
 {
-	std::vector<std::unique_ptr<ShareFile>> Out;
-	if (File.IsSplit) Database.GetSplitFilesByParent.Execute(File.ID, File.Change.Instance, From, Count,
+	std::vector<ShareFile> Out;
+	if (File.IsSplit()) Database->GetSplitFiles.Execute(File.ID(), File.Change().Instance, From, Count,
 		[&Out](
-			Counter &IDInstance, UUID &IDIndex,
-			Counter &ChangeInstance, UUID &ChangeIndex,
-			Counter &ParentInstance, UUID &ParentIndex,
-			std::string &Name, bool &IsFile, Timestamp &Modified,
-			SharePermissions &Permissions, bool IsSplit)
-		{
-			Out.push_back(new ShareFile{
-				NodeID{IDInstance, IDIndex},
-				NodeID{ChangeInstance, ChangeIndex},
-				NodeID{ParentInstance, ParentIndex},
-				Name, IsFile, Modified, Permissions, IsSplit});
-		});
-	else Database.GetFilesByParent.Execute(File.ID, From, Count,
+			NodeID &&ID, NodeID &&Change, NodeID &&Parent,
+			std::string &&Name, bool &&IsFile, Timestamp &&Modified,
+			SharePermissions &&Permissions, bool &&IsSplit)
+			{ Out.push_back(ShareFile{ID, Change, Parent, Name, IsFile, Modified, Permissions, IsSplit}); });
+	else Database->GetFiles.Execute(File.ID(), From, Count,
 		[&Out](
-			Counter &IDInstance, UUID &IDIndex,
-			Counter &ChangeInstance, UUID &ChangeIndex,
-			Counter &ParentInstance, UUID &ParentIndex,
-			std::string &Name, bool &IsFile, Timestamp &Modified,
-			SharePermissions &Permissions, bool IsSplit)
-		{
-			Out.push_back(new ShareFile{
-				NodeID{IDInstance, IDIndex},
-				NodeID{ChangeInstance, ChangeIndex},
-				NodeID{ParentInstance, ParentIndex},
-				Name, IsFile, Modified, Permissions, IsSplit});
-		});
+			NodeID &&ID, NodeID &&Change, NodeID &&Parent,
+			std::string &&Name, bool &&IsFile, Timestamp &&Modified,
+			SharePermissions &&Permissions, bool &&IsSplit)
+			{ Out.push_back(ShareFile{ID, Change, Parent, Name, IsFile, Modified, Permissions, IsSplit}); });
 	assert(Out.size() <= Count);
 	return Out;
 }
 
-std::unique_ptr<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile,
+ActionResult<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile,
 	bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
 	bool GroupRead, bool GroupWrite, bool GroupExecute,
 	bool OtherRead, bool OtherWrite, bool OtherExecute)
 {
-	Database.Begin();
-	uint64_t FileIndex = Database.GetFileID();
-	Database.IncrementFileID();
-	Database.End();
-	auto Parent = Get(Path.parent());
-	if (!Parent) throw ActionError{ActionError::Missing};
-	if (Parent->IsFile) throw ActionError{ActionError::Invalid};
-	Transact(Transaction.Create,
-		FileIndex, Parent, Path.file(), IsFile,
-		OwnerRead, OwnerWrite, OwnerExecute,
-		GroupRead, GroupWrite, GroupExecute,
-		OtherRead, OtherWrite, OtherExecute);
+	Database->Begin();
+	uint64_t FileIndex = Database->GetFileIndex();
+	Database->IncrementFileIndex();
+	Database->End();
+	auto Parent = Get(Path.parent_path());
+	if (!Parent) return ActionError::Missing;
+	if (Parent->IsFile()) return ActionError::Invalid;
+	ShareFile Out(
+		{HostInstanceIndex, FileIndex}, Parent->ID(), {},
+		Path.filename().string(), IsFile, std::time(nullptr),
+		{
+			OwnerRead, OwnerWrite, OwnerExecute,
+			GroupRead, GroupWrite, GroupExecute,
+			OtherRead, OtherWrite, OtherExecute
+		},
+		false);
+	(*Transact)(CTV1Create(), Out.ID().Index, Out.Parent(), Out.Name(), Out.IsFile(), Out.Permissions());
+	Log->Debug() << "Created file " << HostInstanceIndex << " " << FileIndex << " / 0 0";
+	return Out;
 }
 
 void ShareCore::SetPermissions(ShareFile const &File,
@@ -475,53 +436,65 @@ void ShareCore::SetPermissions(ShareFile const &File,
 	bool GroupRead, bool GroupWrite, bool GroupExecute,
 	bool OtherRead, bool OtherWrite, bool OtherExecute)
 {
-	Database.Begin();
-	uint64_t ChangeIndex = Database.GetChangeIndex();
-	Database.IncrementChangeIndex();
-	Database.End();
-	Transact(Transaction.SetPermissions,
-		File.Instance, File.ID, ChangeIndex,
+	Database->Begin();
+	uint64_t ChangeIndex = Database->GetChangeIndex();
+	Database->IncrementChangeIndex();
+	Database->End();
+	(*Transact)(CTV1SetPermissions(),
+		File, ChangeIndex,
 		OwnerRead, OwnerWrite, OwnerExecute,
 		GroupRead, GroupWrite, GroupExecute,
 		OtherRead, OtherWrite, OtherExecute);
+	Log->Debug() << "Changed file " << File.ID().Instance << " " << File.ID().Index << " / " <<
+		File.Change().Instance << " " << File.Change().Index << " -> " << HostInstanceIndex << " " << ChangeIndex;
 }
 
 void ShareCore::SetTimestamp(ShareFile const &File, unsigned int Timestamp)
 {
-	Database.Begin();
-	uint64_t ChangeIndex = Database.GetChangeIndex();
-	Database.IncrementChangeIndex();
-	Database.End();
-	Transact(Transaction.SetTimestamp,
-		File.Instance, File.ID, ChangeIndex,
+	Database->Begin();
+	uint64_t ChangeIndex = Database->GetChangeIndex();
+	Database->IncrementChangeIndex();
+	Database->End();
+	(*Transact)(CTV1SetTimestamp(),
+		File, ChangeIndex,
 		Timestamp);
+	Log->Debug() << "Changed file " << File.ID().Instance << " " << File.ID().Index << " / " <<
+		File.Change().Instance << " " << File.Change().Index << " -> " << HostInstanceIndex << " " << ChangeIndex;
 }
 
 void ShareCore::Delete(ShareFile const &File)
 {
-	Transact(Transaction.Delete, File);
+	(*Transact)(CTV1Delete(), File);
+	Log->Debug() << "Deleted file head " << File.ID().Instance << " " << File.ID().Index;
 }
 
-void ShareCore::Move(ShareFile const &File, bfs::path const &To)
+ActionError ShareCore::Move(ShareFile const &File, bfs::path const &To)
 {
-	Database.Begin();
-	UUID ChangeIndex = Database.GetChangeIndex();
-	Database.IncrementChangeIndex();
-	Database.End();
+	Database->Begin();
+	UUID ChangeIndex = Database->GetChangeIndex();
+	Database->IncrementChangeIndex();
+	Database->End();
 
 	auto ToFile = Get(To);
 	if (!ToFile)
 	{
-		ToFile = Get(To.parent());
-		if (!ToFile) throw ActionError{ActionError::Missing};
-		if (ToFile->IsFile) throw ActionError{ActionError::Invalid};
+		ToFile = Get(To.parent_path().string());
+		if (!ToFile) return ActionError::Missing;
+		if (ToFile->IsFile()) return ActionError::Invalid;
 	}
 
-	if (ToFile->IsFile)
+	if (ToFile->IsFile())
 	{
-		Transact(Transaction.Move, File, ToFile->ParentInstance, ToFile->ParentID, ToFile.Name);
+		(*Transact)(CTV1Move(), File, ChangeIndex, ToFile->Parent(), ToFile->Name());
 		Delete(ToFile);
 	}
-	else Transact(Transaction.Move, File, ToFile->Instance, ToFile->ID, File.Name);
+	else (*Transact)(CTV1Move(), File, ChangeIndex, ToFile->ID(), File.Name());
+	Log->Debug() << "Changed file " << File.ID().Instance << " " << File.ID().Index << " / " <<
+		File.Change().Instance << " " << File.Change().Index << " -> " << HostInstanceIndex << " " << ChangeIndex;
+	return ActionError::OK;
 }
 
+ShareFile ShareCore::SplitInstanceFile(Counter Index)
+{
+	return std::forward_as_tuple(NodeID(), NodeID(), NodeID(), String() << Index, false, 0, SharePermissions{1, 1, 1, 1, 1, 1, 1, 1, 1}, false);
+}

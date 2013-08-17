@@ -5,8 +5,12 @@
 #include <iostream>
 #include <fstream>
 #include <cassert>
+#include <boost/filesystem.hpp>
+#include <boost/filesystem/fstream.hpp>
 
 #include "error.h"
+
+namespace bfs = boost::filesystem;
 
 struct NullLogStream
 {
@@ -57,7 +61,7 @@ struct StandardOutLog
 	StandardLogStream<true> Error(void) { return {std::cerr, ErrorPrefix}; }
 
 	private:
-		std::string 
+		std::string
 #ifndef NDEBUG
 			DebugPrefix,
 #endif
@@ -66,7 +70,7 @@ struct StandardOutLog
 
 struct FileLog
 {
-	FileLog(std::string const &Path) : Stream(Path)
+	FileLog(bfs::path const &Path) : Stream(Path)
 	{
 		assert(Stream);
 		if (!Stream) throw SystemError() << "Could not open log file \"" << Path << "\"";
@@ -87,8 +91,8 @@ struct FileLog
 	StandardLogStream<true> Error(void) { return {Stream, ErrorPrefix}; }
 
 	private:
-		std::ofstream Stream;
-		std::string 
+		bfs::ofstream Stream;
+		std::string
 #ifndef NDEBUG
 			DebugPrefix,
 #endif

@@ -4,6 +4,7 @@
 #include <string>
 #include <sstream>
 #include <functional>
+#include <cassert>
 
 template <int InternalID> struct ErrorBase
 {
@@ -24,6 +25,9 @@ template <int InternalID> inline std::ostream& operator <<(std::ostream &Out, Er
 
 typedef ErrorBase UserError;
 typedef ErrorBase SystemError;
+
+template <typename Type> inline void Assert(Type const &Value) { assert(Value); }
+template <typename Type1, typename Type2> inline void Assert(Type1 const &Value1, Type2 const &Value2) { assert(Value1 == Value2); }
 
 struct Cleanup
 {

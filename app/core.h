@@ -5,6 +5,8 @@
 #include "transaction.h"
 
 // TODO
+// Test fuse different user access, group permissions
+// Test mkdir in non-dir path, does mkdir/create get called?
 // FAILPOINT macros, testing utility file - indicate when hit for test verification
 // PAUSEPOINT macros (by file/line, pauses until admin command, indicate when hit)
 // Add unix domain socket to core, commands, admin app
@@ -14,23 +16,26 @@
 #define App "sonch"
 typedef uint64_t UUID;
 
-struct ActionError
+enum class ActionError
 {
-	enum CodeType
-	{
-		OK,
-		Exists,
-		Missing,
-		Invalid
-	} Code;
+	OK,
+	Unknown,
+	Exists,
+	Missing,
+	Invalid
 };
 
 template <typename ValueType> struct ActionResult
 {
-	ActionResult(ActionError::CodeType Code) : Code(Code) { assert(Code != ActionError::OK); }
+	ActionResult(ActionError Code) : Code(Code) { assert(Code != ActionError::OK); }
 	ActionResult(ValueType const &Value) : Code(ActionError::OK), Value(Value) { }
-	operator ValueType() { assert(Code == ActionError::OK); return Value; }
-	ActionError::CodeType Code;
+	operator bool(void) { return Code == ActionError::OK; }
+	operator ValueType(void) { assert(Code == ActionError::OK); return Value; }
+	ValueType &operator *(void) { return Value; }
+	ValueType const &operator *(void) const { return Value; }
+	ValueType *operator ->(void) { return &Value; }
+	ValueType const *operator ->(void) const { return &Value; }
+	ActionError Code;
 	ValueType Value;
 };
 
@@ -57,85 +62,123 @@ struct SharePermissions
 	unsigned OtherExecute : 1;
 };
 
-typedef std::tuple<NodeID, NodeID, NodeID, std::string, bool, uint64_t, SharePermissions, bool> ShareFileTuple;
+typedef std::tuple<NodeID, NodeID, NodeID, std::string, bool, Timestamp, SharePermissions, bool> ShareFileTuple;
 struct ShareFile : ShareFileTuple
 {
-	NodeID const &ID(void) const { return std::get<0>(*this); }
-	NodeID const &Parent(void) const { return std::get<1>(*this); }
-	NodeID const &Change(void) const { return std::get<2>(*this); }
-	std::string const &Name(void) const { return std::get<3>(*this); }
-	bool const &IsFile(void) const { return std::get<4>(*this); }
-	uint64_t const &Timestamp(void) const { return std::get<5>(*this); }
-	SharePermissions const &Permissions(void) const { return std::get<6>(*this); }
-	bool const &IsSplit(void) const { return std::get<7>(*this); }
+	using ShareFileTuple::ShareFileTuple;
 
-	bool OwnerRead(void) const { return Permissions().OwnerRead; }
-	bool OwnerWrite(void) const { return Permissions().OwnerWrite; };
-	bool OwnerExecute(void) const { return Permissions().OwnerExecute; };
-	bool GroupRead(void) const { return Permissions().GroupRead; };
-	bool GroupWrite(void) const { return Permissions().GroupWrite; };
-	bool GroupExecute(void) const { return Permissions().GroupExecute; };
-	bool OtherRead(void) const { return Permissions().OtherRead; };
-	bool OtherWrite(void) const { return Permissions().OtherWrite; };
-	bool OtherExecute(void) const { return Permissions().OtherExecute; };
+	inline NodeID const &ID(void) const { return std::get<0>(*this); }
+	inline NodeID const &Parent(void) const { return std::get<1>(*this); }
+	inline NodeID const &Change(void) const { return std::get<2>(*this); }
+	inline std::string const &Name(void) const { return std::get<3>(*this); }
+	inline bool const &IsFile(void) const { return std::get<4>(*this); }
+	inline Timestamp const &ModifiedTime(void) const { return std::get<5>(*this); }
+	inline SharePermissions const &Permissions(void) const { return std::get<6>(*this); }
+	inline bool const &IsSplit(void) const { return std::get<7>(*this); }
+
+	inline bool OwnerRead(void) const { return Permissions().OwnerRead; }
+	inline bool OwnerWrite(void) const { return Permissions().OwnerWrite; }
+	inline bool OwnerExecute(void) const { return Permissions().OwnerExecute; }
+	inline bool GroupRead(void) const { return Permissions().GroupRead; }
+	inline bool GroupWrite(void) const { return Permissions().GroupWrite; }
+	inline bool GroupExecute(void) const { return Permissions().GroupExecute; }
+	inline bool OtherRead(void) const { return Permissions().OtherRead; }
+	inline bool OtherWrite(void) const { return Permissions().OtherWrite; }
+	inline bool OtherExecute(void) const { return Permissions().OtherExecute; }
 };
 
-struct CoreDatabase : SQLDatabase
+typedef ActionResult<ShareFile> GetResult;
+
+struct CoreDatabaseOperations
+{
+	void Bind(sqlite3 *BareContext, sqlite3_stmt *Context, char const *Template, size_t &Index, NodeID const &Value)
+	{
+		if (sqlite3_bind_int(Context, Index, Value.Instance) != SQLITE_OK)
+			throw SystemError() << "Could not bind argument " << Index << " to \"" << Template << "\": " << sqlite3_errmsg(BareContext);
+		if (sqlite3_bind_int(Context, Index + 1, Value.Index) != SQLITE_OK)
+			throw SystemError() << "Could not bind argument " << Index << " to \"" << Template << "\": " << sqlite3_errmsg(BareContext);
+		Index += 2;
+	}
+
+	NodeID Unbind(sqlite3_stmt *Context, size_t &Index, ::Type<NodeID>)
+	{
+		size_t const BaseIndex = Index;
+		Index += 2;
+		return
+		{
+			static_cast<Counter>(sqlite3_column_int(Context, BaseIndex)),
+			static_cast<Counter>(sqlite3_column_int(Context, BaseIndex + 1))
+		};
+	}
+
+	void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, char const *Template, size_t &Index, SharePermissions const &Value)
+	{
+		if (sqlite3_bind_blob(Context, Index, &Value, sizeof(Value), nullptr) != SQLITE_OK)
+			throw SystemError() << "Could not bind argument " << Index << " to \"" << Template << "\": " << sqlite3_errmsg(BaseContext);
+		++Index;
+	}
+
+	SharePermissions Unbind(sqlite3_stmt *Context, size_t &Index, ::Type<SharePermissions>)
+	{
+		assert(sqlite3_column_bytes(Context, Index) == sizeof(SharePermissions));
+		return *static_cast<SharePermissions const *>(sqlite3_column_blob(Context, Index++));
+	}
+
+};
+struct CoreDatabaseStructure : SQLDatabase<CoreDatabaseOperations>
+{
+	CoreDatabaseStructure(bfs::path const &DatabasePath, bool Create, std::string const &InstanceName, UUID const &InstanceID);
+};
+struct CoreDatabase : CoreDatabaseStructure
 {
 	CoreDatabase(bfs::path const &DatabasePath, bool Create, std::string const &InstanceName, UUID const &InstanceID);
 
-	std::unique_ptr<SQLDatabase::Statement<void(void)>> Begin;
-	std::unique_ptr<SQLDatabase::Statement<void(void)>> End;
-	std::unique_ptr<SQLDatabase::Statement<UUID(void)>> GetFileIndex;
-	std::unique_ptr<SQLDatabase::Statement<void(void)>> IncrementFileIndex;
-	std::unique_ptr<SQLDatabase::Statement<UUID(void)>> GetChangeIndex;
-	std::unique_ptr<SQLDatabase::Statement<void(void)>> IncrementChangeIndex;
-	std::unique_ptr<SQLDatabase::Statement<ShareFileTuple(Counter IDInstance, UUID IDIndex)>> GetFileByID;
-	std::unique_ptr<SQLDatabase::Statement<ShareFileTuple(Counter ParentInstance, UUID ParentIndex, std::string Name)>> GetFile;
-	std::unique_ptr<SQLDatabase::Statement<ShareFileTuple(Counter ParentInstance, UUID ParentIndex, Counter SplitInstance, std::string Name)>> GetSplitFile;
-	std::unique_ptr<SQLDatabase::Statement<ShareFileTuple(Counter ParentInstance, UUID ParentIndex, Counter Offset, Counter Limit)>> GetFiles;
-	std::unique_ptr<SQLDatabase::Statement<ShareFileTuple(Counter ParentInstance, UUID ParentIndex, Counter SplitInstance, Counter Offset, Counter Limit)>> GetSplitFiles;
-	std::unique_ptr<SQLDatabase::Statement<void(Counter, UUID, Counter, UUID, std::string, bool, Timestamp, SharePermissions)>> CreateFile;
-	std::unique_ptr<SQLDatabase::Statement<void(Counter, UUID, Counter, UUID)>> DeleteFile;
-	std::unique_ptr<SQLDatabase::Statement<void(SharePermissions, Counter, UUID, Counter, UUID, Counter, UUID)>> SetPermissions;
-	std::unique_ptr<SQLDatabase::Statement<void(Counter, UUID, Timestamp, Counter, UUID, Counter, UUID)>> SetTimestamp;
+	template <typename Signature> using Statement = typename SQLDatabase<CoreDatabaseOperations>::Statement<Signature>;
+
+	Statement<void(void)> Begin;
+	Statement<void(void)> End;
+	Statement<UUID(void)> GetFileIndex;
+	Statement<void(void)> IncrementFileIndex;
+	Statement<UUID(void)> GetChangeIndex;
+	Statement<void(void)> IncrementChangeIndex;
+	Statement<Counter(std::string Filename)> GetInstanceIndex;
+	Statement<ShareFileTuple(NodeID ID)> GetFileByID;
+	Statement<ShareFileTuple(NodeID Parent, std::string Name)> GetFile;
+	Statement<ShareFileTuple(NodeID Parent, Counter SplitInstance, std::string Name)> GetSplitFile;
+	Statement<ShareFileTuple(NodeID Parent, Counter Offset, Counter Limit)> GetFiles;
+	Statement<ShareFileTuple(NodeID Parent, Counter SplitInstance, Counter Offset, Counter Limit)> GetSplitFiles;
+	Statement<void(NodeID ID, NodeID Parent, std::string Name, bool IsFile, Timestamp ModifiedTime, SharePermissions Permissions)> CreateFile;
+	Statement<void(NodeID ID, NodeID Change)> DeleteFile;
+	Statement<void(NodeID NewChange, SharePermissions NewPermissions, NodeID ID, NodeID Change)> SetPermissions;
+	Statement<void(NodeID NewChange, Timestamp NewModifiedTime, NodeID ID, NodeID Change)> SetTimestamp;
+	Statement<void(NodeID NewChange, NodeID NewParent, std::string NewName, NodeID ID, NodeID Change)> MoveFile;
+	Statement<void(NodeID NewChange, NodeID OldChange)> CreateChange;
 };
 
 DefineProtocol(CoreTransactorProtocol);
 DefineProtocolVersion(CoreTransactorVersion1, CoreTransactorProtocol);
 DefineProtocolMessage(CTV1Create, CoreTransactorVersion1,
-	void(UUID const &ID,
-		NodeID const &Parent, std::string const &Name, bool const &IsFile,
-		bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
-		bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
-		bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute));
+	void(
+		UUID ID,
+		NodeID Parent, std::string Name, bool IsFile,
+		SharePermissions Permissions));
 DefineProtocolMessage(CTV1SetPermissions, CoreTransactorVersion1,
 	void(
-		ShareFile const &File, UUID const &NewChangeIndex,
-		bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
-		bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
-		bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute));
+		ShareFile File, UUID NewChangeIndex,
+		bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
+		bool GroupRead, bool GroupWrite, bool GroupExecute,
+		bool OtherRead, bool OtherWrite, bool OtherExecute));
 DefineProtocolMessage(CTV1SetTimestamp, CoreTransactorVersion1,
 	void(
-		ShareFile const &File, UUID const &NewChangeIndex,
-		uint64_t const &Timestamp));
+		ShareFile File, UUID NewChangeIndex,
+		uint64_t Timestamp));
 DefineProtocolMessage(CTV1Delete, CoreTransactorVersion1,
-	void(ShareFile const &File));
+	void(ShareFile File));
 DefineProtocolMessage(CTV1Move, CoreTransactorVersion1,
 	void(
-		ShareFile const &File, UUID const &NewChangeIndex,
-		NodeID const &ParentID,
-		std::string const &Name));
-
-struct CoreTransactor : Transactor<CTV1Create, CTV1SetPermissions, CTV1SetTimestamp, CTV1Delete, CTV1Move>
-{
-	CTV1Create::Function Create;
-	CTV1SetPermissions::Function SetPermissions;
-	CTV1SetTimestamp::Function SetTimestamp;
-	CTV1Delete::Function Delete;
-	CTV1Move::Function Move;
-	CoreTransactor(std::mutex &CoreMutex);
-};
+		ShareFile File, UUID NewChangeIndex,
+		NodeID ParentID,
+		std::string Name));
 
 struct ShareCore
 {
@@ -146,58 +189,51 @@ struct ShareCore
 	unsigned int GetUser(void) const;
 	unsigned int GetGroup(void) const;
 
-	std::unique_ptr<ShareFile> Create(bfs::path const &Path, bool IsFile,
+	bfs::path GetRealPath(ShareFile const &File) const;
+
+	ActionResult<ShareFile> Create(bfs::path const &Path, bool IsFile,
 		bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
 		bool GroupRead, bool GroupWrite, bool GroupExecute,
 		bool OtherRead, bool OtherWrite, bool OtherExecute);
-	std::unique_ptr<ShareFile> Get(bfs::path const &Path);
-	std::vector<std::unique_ptr<ShareFile>> GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count);
+	GetResult Get(NodeID const &ID);
+	GetResult Get(bfs::path const &Path);
+	std::vector<ShareFile> GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count);
 	void SetPermissions(ShareFile const &File,
 		bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
 		bool GroupRead, bool GroupWrite, bool GroupExecute,
 		bool OtherRead, bool OtherWrite, bool OtherExecute);
 	void SetTimestamp(ShareFile const &File, unsigned int Timestamp);
 	void Delete(ShareFile const &File);
-	void Move(ShareFile const &File, bfs::path const &To);
+	ActionError Move(ShareFile const &File, bfs::path const &To);
 
 	private:
-		bfs::path Root;
-		bfs::path FilePath;
+		bfs::path const Root;
+		bfs::path const FilePath;
+
+		std::unique_ptr<FileLog> Log;
 
 		std::string InstanceName;
 		UUID InstanceID;
 		Counter InstanceIndex;
 		std::string InstanceFilename;
 
-		std::unique_ptr<SQLDatabase> Database;
+		std::mutex Mutex;
 
+		ShareFile SplitInstanceFile(Counter Index);
+		ShareFile SplitFile;
+
+		std::unique_ptr<CoreDatabase> Database;
+
+		typedef Transactor<CTV1Create, CTV1SetPermissions, CTV1SetTimestamp, CTV1Delete, CTV1Move> CoreTransactor;
 		struct
 		{
-			std::function<void(UUID const &ID,
-				NodeID const &Parent, std::string const &Name, bool const &IsFile,
-				bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
-				bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
-				bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute)>
-				Create;
-			std::function<void(
-				ShareFile const &File, UUID const &NewChangeIndex,
-				bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
-				bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
-				bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute)>
-				SetPermissions;
-			std::function<void(
-				ShareFile const &File, UUID const &NewChangeIndex,
-				uint64_t const &Timestamp)>
-				SetTimestamp;
-			std::function<void(ShareFile const &File)>
-				Delete;
-			std::function<void(
-				ShareFile const &File, UUID const &NewChangeIndex,
-				NodeID const &ParentID,
-				std::string const &Name)>
-				Move;
+			CTV1Create::Function Create;
+			CTV1SetPermissions::Function SetPermissions;
+			CTV1SetTimestamp::Function SetTimestamp;
+			CTV1Delete::Function Delete;
+			CTV1Move::Function Move;
 		} Transaction;
-		std::unique_ptr<Transactor> Transact;
+		std::unique_ptr<CoreTransactor> Transact;
 };
 
 #endif

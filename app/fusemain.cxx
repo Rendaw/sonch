@@ -9,8 +9,6 @@
 #include <dirent.h>
 #include <sys/time.h>
 #include <sstream>
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
 
 #define _FILE_OFFSET_BITS 64
 #define _REENTRANT
@@ -19,68 +17,63 @@
 
 struct
 {
-	boost::filesystem::path RootPath;
+	bfs::path RootPath;
 	std::string InstanceName;
 } static PreinitContext;
 
 static std::unique_ptr<ShareCore> Core;
 
-void ExportAttributes(ShareFile &File, stat *Output)
+void ExportAttributes(ShareFile const &File, struct stat *Output)
 {
 	Output->st_mode =
-		(File->Misc.IsFile ? ST_IFREG : ST_IFDIR) |
-		(File->Misc.OwnerRead ? ST_IRUSR : 0) |
-		(File->Misc.OwnerWrite ? ST_IWUSR : 0) |
-		(File->Misc.OwnerExecute ? ST_IXUSR : 0) |
-		(File->Misc.GroupRead ? ST_IRGRP : 0) |
-		(File->Misc.GroupWrite ? ST_IWGRP : 0) |
-		(File->Misc.GroupExecute ? ST_IXGRP : 0) |
-		(File->Misc.OtherRead ? ST_IROTH : 0) |
-		(File->Misc.OtherWrite ? ST_IWOTH : 0) |
-		(File->Misc.OtherExecute ? ST_IXOTH : 0);
+		(File.IsFile() ? S_IFREG : S_IFDIR) |
+		(File.OwnerRead() ? S_IRUSR : 0) |
+		(File.OwnerWrite() ? S_IWUSR : 0) |
+		(File.OwnerExecute() ? S_IXUSR : 0) |
+		(File.GroupRead() ? S_IRGRP : 0) |
+		(File.GroupWrite() ? S_IWGRP : 0) |
+		(File.GroupExecute() ? S_IXGRP : 0) |
+		(File.OtherRead() ? S_IROTH : 0) |
+		(File.OtherWrite() ? S_IWOTH : 0) |
+		(File.OtherExecute() ? S_IXOTH : 0);
 	Output->st_nlink = 0;
 	Output->st_uid = Core->GetUser();
 	Output->st_gid = Core->GetGroup();
-	Output->st_mtime = File->Timestamp;
-	Output->st_ctime = File->Timestamp;
+	Output->st_mtime = File.ModifiedTime();
+	Output->st_ctime = File.ModifiedTime();
 }
 
 bool CanRead(ShareFile const &File)
 {
 	return
-		(File.Misc.OwnerRead && (Core->GetUID() == fuse_get_context()->uid)) ||
-		(File.Misc.GroupRead && (Core->GetGID() == fuse_get_context()->gid)) ||
-		(File.Misc.OtherRead);
+		(File.OwnerRead() && (Core->GetUser() == fuse_get_context()->uid)) ||
+		(File.GroupRead() && (Core->GetGroup() == fuse_get_context()->gid)) ||
+		(File.OtherRead());
 }
 
 bool CanWrite(ShareFile const &File)
 {
 	return
-		(File.Misc.OwnerWrite && (Core->GetUID() == fuse_get_context()->uid)) ||
-		(File.Misc.GroupWrite && (Core->GetGID() == fuse_get_context()->gid)) ||
-		(File.Misc.OtherWrite);
+		(File.OwnerWrite() && (Core->GetUser() == fuse_get_context()->uid)) ||
+		(File.GroupWrite() && (Core->GetGroup() == fuse_get_context()->gid)) ||
+		(File.OtherWrite());
 }
 
 bool CanExecute(ShareFile const &File)
 {
 	return
-		(File.Misc.OwnerExecute && (Core->GetUID() == fuse_get_context()->uid)) ||
-		(File.Misc.GroupExecute && (Core->GetGID() == fuse_get_context()->gid)) ||
-		(File.Misc.OtherExecute);
+		(File.OwnerExecute() && (Core->GetUser() == fuse_get_context()->uid)) ||
+		(File.GroupExecute() && (Core->GetGroup() == fuse_get_context()->gid)) ||
+		(File.OtherExecute());
 }
 
-struct FileContext
+/*struct FileContext
 {
-	std::unique_ptr<ShareFile> File;
+	std::unique_ptr<ShareFile> Share;
 	int FileDescriptor;
 	FileContext(void) : FileDescriptor(-1) {}
 	~FileContext(void) { if (FileDescriptor >= 0) close(FileDescriptor); }
-};
-
-struct DirectoryContext
-{
-	std::unique_ptr<ShareFile> File;
-};
+};*/
 
 int main(int argc, char **argv)
 {
@@ -120,7 +113,8 @@ int main(int argc, char **argv)
 	// Non-filesystem events
 	FuseCallbacks.init = [](fuse_conn_info *conn) -> void *
 	{
-		try Core.reset(new ShareCore(PreinitContext.RootPath, PreinitContext.InstanceName));
+		StandardOutLog Log("initialization");
+		try { Core.reset(new ShareCore(PreinitContext.RootPath, PreinitContext.InstanceName)); }
 		catch (UserError &Message)
 		{
 			Log.Error() << Message;
@@ -137,36 +131,40 @@ int main(int argc, char **argv)
 	// Lookup/read metadata actions
 	FuseCallbacks.getattr = [](const char *path, struct stat *stbuf)
 	{
-		std::unique_ptr<ShareFile> File = Core->Get(path);
+		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
-		int Result = lstat(File->RealPath().string().c_str(), stbuf);
-		if (Result == -1) return -errno;
-		return ExportAttributes(File, stbuf);
+		if (File->IsFile())
+		{
+			int Result = lstat(Core->GetRealPath(*File).string().c_str(), stbuf);
+			if (Result == -1) return -errno;
+		}
+		ExportAttributes(*File, stbuf);
+		return 0;
 	};
 
-	FuseCallbacks.fgetattr = [](const char *, struct stat *stbuf, struct fuse_file_info *fi)
+	/*FuseCallbacks.fgetattr = [](const char *, struct stat *stbuf, struct fuse_file_info *fi)
 	{
-		ShareFile *File = std::reinterpret_cast<ShareFile *>(fi->fh);
+		ShareFile *File = reinterpret_cast<ShareFile *>(fi->fh);
 		int Result = fstat(File->FileDescriptor, stbuf);
 		if (Result == -1) return -errno;
-		return ExportAttributes(File, stbuf);
-	};
+		return ExportAttributes(*File, stbuf);
+	};*/
 
 	FuseCallbacks.access = [](const char *path, int mask)
 	{
-		std::unique_ptr<ShareFile> File = Core->Get(path);
+		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
 		if (
-			(!(mask & R_OK) || CanRead(File)) &&
-			(!(mask & W_OK) || CanWrite(File)) &&
-			(!(mask & X_OK) || CanExecute(File))
+			(!(mask & R_OK) || CanRead(*File)) &&
+			(!(mask & W_OK) || CanWrite(*File)) &&
+			(!(mask & X_OK) || CanExecute(*File))
 		) return 0;
 		return -EACCES;
 	};
 
 	FuseCallbacks.statfs = [](const char *path, struct statvfs *stbuf)
 	{
-		int Result = statvfs(Core->GetRootPath().string().c_str(), stbuf);
+		int Result = statvfs(Core->GetRoot().string().c_str(), stbuf);
 		if (Result == -1) return -errno;
 		return 0;
 	};
@@ -174,84 +172,67 @@ int main(int argc, char **argv)
 	// Directory or file changes
 	FuseCallbacks.rename = [](const char *from, const char *to)
 	{
-		std::unique_ptr<ShareFile> From = Core->Get(from);
+		GetResult From = Core->Get(from);
 		if (!From) return -ENOENT;
-		try
+		switch (Core->Move(*From, to))
 		{
-			Core->Move(From, to);
-		}
-		catch (ActionError const &Error)
-		{
-			switch (Error.Value)
-			{
-				case ActionError::Invalid: return -ENOTDIR;
-				case ActionError::Missing: return -ENOENT;
-				default: assert(false);
-			}
+			case ActionError::OK: break;
+			case ActionError::Invalid: return -ENOTDIR;
+			case ActionError::Missing: return -ENOENT;
+			default: assert(false);
 		}
 		return 0;
 	};
 
 	FuseCallbacks.chmod = [](const char *path, mode_t mode)
 	{
-		std::unique_ptr<ShareFile> File = Core->Get(path);
+		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
-		Core->SetPermissions(File,
-			mode & ST_IRUSR,
-			mode & ST_IWUSR,
-			mode & ST_IXUSR,
-			mode & ST_IRGRP,
-			mode & ST_IWGRP,
-			mode & ST_IXGRP,
-			mode & ST_IROTH,
-			mode & ST_IWOTH,
-			mode & ST_IXOTH);
+		Core->SetPermissions(*File,
+			mode & S_IRUSR, mode & S_IWUSR, mode & S_IXUSR,
+			mode & S_IRGRP, mode & S_IWGRP, mode & S_IXGRP,
+			mode & S_IROTH, mode & S_IWOTH, mode & S_IXOTH);
 		return 0;
 	};
 
 	FuseCallbacks.utimens = [](const char *path, const struct timespec ts[2])
 	{
-		std::unique_ptr<ShareFile> File = Core->Get(path);
+		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
-		Core->SetTimestamp(File, ts[1].tv_sec);
-		struct timeval tv[2];
+		Core->SetTimestamp(*File, ts[1].tv_sec);
+		/*struct timeval tv[2];
 		tv[0].tv_sec = ts[0].tv_sec;
 		tv[0].tv_usec = ts[0].tv_nsec / 1000;
 		tv[1].tv_sec = ts[1].tv_sec;
 		tv[1].tv_usec = ts[1].tv_nsec / 1000;
-		utimes(File->GetRealPath().string().c_str(), tv);
+		utimes(File->GetRealPath().string().c_str(), tv);*/
 		return 0;
 	};
 
 	// Directory access
 	FuseCallbacks.mkdir = [](const char *path, mode_t mode)
 	{
-		try
+		auto Result = Core->Create(path, false,
+			mode & S_IRUSR, mode & S_IWUSR, mode & S_IXUSR,
+			mode & S_IRGRP, mode & S_IWGRP, mode & S_IXGRP,
+			mode & S_IROTH, mode & S_IWOTH, mode & S_IXOTH);
+		switch (Result.Code)
 		{
-			Core->Create(path, false,
-				mode & ST_IRUSR, mode & ST_IWUSR, mode & ST_IXUSR,
-				mode & ST_IRGRP, mode & ST_IWGRP, mode & ST_IXGRP,
-				mode & ST_IROTH, mode & ST_IWOTH, mode & ST_IXOTH);
-		}
-		catch (ActionError &Error)
-		{
-			switch (Error.Value)
-			{
-				case ActionError::Unknown: return -EEXIST;
-				default: assert(false);
-			}
+			case ActionError::OK: break;
+			case ActionError::Unknown: return -EEXIST;
+			default: assert(false); break;
 		}
 		return 0;
 	};
 
 	FuseCallbacks.opendir = [](const char *path, fuse_file_info *fi)
 	{
-		ShareFile *File = Core->Get(path).release();
+		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
-		if (File->IsFile) return -ENOTDIR;
-		if ((fi->flags & O_WRONLY) || (fi->flags & O_RDWR)) && !CanWrite(File) return -EACCES;
-		if ((fi->flags & O_RDONLY) || (fi->flags & O_RDWR)) && !CanRead(File) return -EACCES;
-		fi->fh = reinterpret_cast<decltype(fi->fh)>(File);
+		if (File->IsFile()) return -ENOTDIR;
+		if (((fi->flags & O_WRONLY) || (fi->flags & O_RDWR)) && !CanWrite(*File)) return -EACCES;
+		if (((fi->flags & O_RDONLY) || (fi->flags & O_RDWR)) && !CanRead(*File)) return -EACCES;
+		fi->fh = reinterpret_cast<decltype(fi->fh)>(new ShareFile(*File));
 		return 0;
 	};
 
@@ -270,7 +251,7 @@ int main(int argc, char **argv)
 				struct stat st;
 				memset(&st, 0, sizeof(st));
 				ExportAttributes(File, &st);
-				if (filler(buf, File.Name.c_str(), &st, offset + Count))
+				if (filler(buf, File.Name().c_str(), &st, offset + Count))
 				{
 					Count = 0;
 					break;
@@ -286,17 +267,17 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.releasedir = [](const char *, struct fuse_file_info *fi)
 	{
-		std::unique_ptr<ShareFile> File(reinterpret_cast<ShareFile *>(fi->fh));
+		delete reinterpret_cast<ShareFile *>(fi->fh);
 		return 0;
 	};
 
 	FuseCallbacks.rmdir = [](const char *path)
 	{
-		std::unique_ptr<ShareFile> File = Core->Get(path).release();
+		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
 		if (Core->GetDirectory(*File, 0, 1).empty())
 			return -ENOTEMPTY;
-		Core->Delete(File);
+		Core->Delete(*File);
 		return 0;
 	};
 

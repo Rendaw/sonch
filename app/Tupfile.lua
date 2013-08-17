@@ -1,10 +1,10 @@
-DatabaseObject = Define.Object{
-	Source = Item 'database.cxx'
+CoreObject = Define.Object{
+	Source = Item 'core.cxx'
 }
 
 FuseApp = Define.Executable{
 	Name = 'sonch',
 	Sources = Item 'fusemain.cxx',
-	Objects = DatabaseObject,
+	Objects = CoreObject,
 	LinkFlags = '-lfuse -lboost_system -lboost_filesystem -lsqlite3'
 }

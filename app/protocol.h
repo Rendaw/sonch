@@ -28,7 +28,7 @@ Messages are completely redefined for each new version.
 
 namespace Protocol
 {
-
+// Overloaded write and read methods
 typedef uint8_t VersionIDType;
 typedef uint8_t MessageIDType;
 typedef uint16_t SizeType;
@@ -42,6 +42,61 @@ template <typename ArrayType> ArraySizeType ConstrainArraySize(ArrayType const &
 
 constexpr SizeType HeaderSize = sizeof(VersionIDType) + sizeof(MessageIDType) + sizeof(SizeType);
 
+template <typename IntType, typename std::enable_if<!std::is_pointer<IntType>::value && !std::is_array<IntType>::value>::type * = nullptr>
+	constexpr SizeType Size(IntType const &Argument)
+	{ return sizeof(Argument); }
+
+template <typename IntType, typename std::enable_if<!std::is_pointer<IntType>::value && !std::is_array<IntType>::value>::type * = nullptr>
+	inline void Write(uint8_t *&Out, IntType const &Argument)
+	{ *reinterpret_cast<IntType *>(Out) = Argument; Out += sizeof(Argument); }
+
+inline SizeType Size(std::string const &Argument)
+{
+	auto const Count = ConstrainArraySize(Argument);
+	return sizeof(Count) + Count;
+}
+inline void Write(uint8_t *&Out, std::string const &Argument)
+{
+	auto const Count = ConstrainArraySize(Argument);
+	Write(Out, Count);
+	memcpy(Out, Argument.c_str(), Count);
+	Out += Count;
+}
+
+template <typename ElementType, typename std::enable_if<!std::is_class<ElementType>::value>::type* = nullptr>
+	inline SizeType Size(std::vector<ElementType> const &Argument)
+	{ return sizeof(decltype(ConstrainArraySize(std::vector<int>()))) + Argument.size() * sizeof(ElementType); }
+
+template <typename ElementType, typename std::enable_if<!std::is_class<ElementType>::value>::type* = nullptr>
+	inline void Write(uint8_t *&Out, std::vector<ElementType> const &Argument)
+{
+	auto const Count = ConstrainArraySize(Argument);
+	Write(Out, Count);
+	memcpy(Out, &Argument[0], Count * sizeof(ElementType));
+	Out += Count * sizeof(ElementType);
+}
+
+template <typename ElementType, typename std::enable_if<std::is_class<ElementType>::value>::type* = nullptr>
+	static inline SizeType Size(std::vector<ElementType> const &Argument)
+{
+	auto const Count = ConstrainArraySize(Argument);
+	SizeType Out = sizeof(Count);
+	for (decltype(Count) ElementIndex = 0; ElementIndex < Argument.size(); ++ElementIndex)
+		Out += Size(Argument[ElementIndex]);
+	return Out;
+}
+template <typename ElementType, typename std::enable_if<std::is_class<ElementType>::value>::type* = nullptr>
+	static inline void Write(uint8_t *&Out, std::vector<ElementType> const &Argument)
+{
+	auto const Count = ConstrainArraySize(Argument);
+	Write(Out, Count);
+	for (decltype(Count) ElementIndex = 0; ElementIndex < Argument.size(); ++ElementIndex)
+	{
+		::Protocol::Write(Out, Argument[ElementIndex]);
+	}
+}
+
+// Infrastructure
 template <uint16_t Individuality> struct Protocol {};
 
 template <VersionIDType IDValue, typename InProtocol> struct Version
@@ -56,101 +111,35 @@ template <MessageIDType IDValue, typename InVersion, typename ...Definition> str
 	typedef std::function<void(Definition const &...)> Function;
 	static constexpr MessageIDType ID = IDValue;
 
-	template <typename... ArgumentTypes> static std::vector<uint8_t> Write(ArgumentTypes... Arguments)
-		{ return ConstArgumentConversion<std::tuple<>, Definition...>::Write(Arguments...); }
+	static std::vector<uint8_t> Write(Definition const &...Arguments)
+	{
+		std::vector<uint8_t> Out;
+		SizeType const DataSize = Size(Arguments...);
+		Out.resize(HeaderSize + DataSize);
+		uint8_t *WritePointer = &Out[0];
+		::Protocol::Write(WritePointer, InVersion::ID);
+		::Protocol::Write(WritePointer, ID);
+		::Protocol::Write(WritePointer, DataSize);
+		Write(WritePointer, Arguments...);
+		return Out;
+	}
 
 	private:
-		template <typename Converted, typename... Unconverted> struct ConstArgumentConversion {};
-		template <typename... Converted, typename NextArgument, typename... RemainingArguments>
-			struct ConstArgumentConversion<std::tuple<Converted...>, NextArgument, RemainingArguments...>
-		{
-			template <typename... ArgumentTypes> static std::vector<uint8_t> Write(ArgumentTypes... Arguments)
-			{
-				return ConstArgumentConversion<std::tuple<Converted..., NextArgument const &>, RemainingArguments...>::Write(Arguments...);
-			}
-		};
-		template <typename... Converted> struct ConstArgumentConversion<std::tuple<Converted...>>
-		{
-			static std::vector<uint8_t> Write(Converted... Arguments)
-			{
-				std::vector<uint8_t> Out;
-				SizeType const DataSize = Size(Arguments...);
-				Out.resize(HeaderSize + DataSize);
-				uint8_t *WritePointer = &Out[0];
-				Message<ID, InVersion, void(Definition...)>::Write(WritePointer, InVersion::ID);
-				Message<ID, InVersion, void(Definition...)>::Write(WritePointer, ID);
-				Message<ID, InVersion, void(Definition...)>::Write(WritePointer, DataSize);
-				Message<ID, InVersion, void(Definition...)>::Write(WritePointer, Arguments...);
-				return Out;
-			}
-		};
-
 		template <typename NextType, typename... RemainingTypes>
 			static inline SizeType Size(NextType NextArgument, RemainingTypes... RemainingArguments)
-			{ return Size(NextArgument) + Size(RemainingArguments...); }
+			{ return ::Protocol::Size(NextArgument) + Size(RemainingArguments...); }
 
 		static constexpr SizeType Size(void) { return 0; }
 
 		template <typename NextType, typename... RemainingTypes>
 			static inline void Write(uint8_t *&Out, NextType NextArgument, RemainingTypes... RemainingArguments)
 			{
-				Write(Out, NextArgument);
+				::Protocol::Write(Out, NextArgument);
 				Write(Out, RemainingArguments...);
 			}
 
 		static inline void Write(uint8_t *&) {}
 
-		template <typename IntType> static constexpr SizeType Size(IntType const &Argument)
-			{ return sizeof(Argument); }
-		template <typename IntType> static inline void Write(uint8_t *&Out, IntType const &Argument)
-			{ *reinterpret_cast<IntType *>(Out) = Argument; Out += sizeof(Argument); }
-
-		static inline SizeType Size(std::string const &Argument)
-		{
-			auto const Count = ConstrainArraySize(Argument);
-			return sizeof(Count) + Count;
-		}
-		static inline void Write(uint8_t *&Out, std::string const &Argument)
-		{
-			auto const Count = ConstrainArraySize(Argument);
-			Write(Out, Count);
-			memcpy(Out, Argument.c_str(), Count);
-			Out += Count;
-		}
-
-		template <typename ElementType, typename std::enable_if<!std::is_class<ElementType>::value>::type* = nullptr>
-			static inline SizeType Size(std::vector<ElementType> const &Argument)
-		{
-			return sizeof(decltype(ConstrainArraySize(std::vector<int>()))) + Argument.size() * sizeof(ElementType);
-		}
-		template <typename ElementType, typename std::enable_if<!std::is_class<ElementType>::value>::type* = nullptr>
-			static inline void Write(uint8_t *&Out, std::vector<ElementType> const &Argument)
-		{
-			auto const Count = ConstrainArraySize(Argument);
-			Write(Out, Count);
-			memcpy(Out, &Argument[0], Count * sizeof(ElementType));
-			Out += Count * sizeof(ElementType);
-		}
-
-		template <typename ElementType, typename std::enable_if<std::is_class<ElementType>::value>::type* = nullptr>
-			static inline SizeType Size(std::vector<ElementType> const &Argument)
-		{
-			auto const Count = ConstrainArraySize(Argument);
-			SizeType Out = sizeof(Count);
-			for (decltype(Count) ElementIndex = 0; ElementIndex < Argument.size(); ++ElementIndex)
-				Out += Size(Argument[ElementIndex]);
-			return Out;
-		}
-		template <typename ElementType, typename std::enable_if<std::is_class<ElementType>::value>::type* = nullptr>
-			static inline void Write(uint8_t *&Out, std::vector<ElementType> const &Argument)
-		{
-			auto const Count = ConstrainArraySize(Argument);
-			Write(Out, Count);
-			for (decltype(Count) ElementIndex = 0; ElementIndex < Argument.size(); ++ElementIndex)
-			{
-				Write(Out, Argument[ElementIndex]);
-			}
-		}
 };
 template <MessageIDType IDValue, typename InVersion, typename ...Definition> constexpr MessageIDType Message<IDValue, InVersion, void(Definition...)>::ID;
 
@@ -221,7 +210,7 @@ struct ReaderTupleElement
 				return ReadImplementation<LogType, typename MessageDerivedTypes<>::Tuple, std::tuple<>>::Read(*this, Log, VersionID, MessageID, Buffer, Offset);
 			}
 			return NextElement::Read(Log, VersionID, MessageID, Buffer);
-		};
+		}
 
 	public:
 		template <
@@ -229,14 +218,14 @@ struct ReaderTupleElement
 			typename ...ArgumentTypes,
 			typename std::enable_if<std::is_same<CallMessageType, MessageType>::value>::type* = nullptr>
 			void Call(ArgumentTypes const & ...Arguments)
-			{ Callback(std::forward<ArgumentTypes const &>(Arguments)...); };
+			{ Callback(std::forward<ArgumentTypes const &>(Arguments)...); }
 
 		template <
 			typename CallMessageType,
 			typename ...ArgumentTypes,
 			typename std::enable_if<!std::is_same<CallMessageType, MessageType>::value>::type* = nullptr>
 			void Call(ArgumentTypes const & ...Arguments)
-			{ NextElement::template Call<CallMessageType, ArgumentTypes...>(std::forward<ArgumentTypes const &>(Arguments)...); };
+			{ NextElement::template Call<CallMessageType, ArgumentTypes...>(std::forward<ArgumentTypes const &>(Arguments)...); }
 
 	private:
 		template <typename LogType, typename UnreadTypes, typename ReadTypes> struct ReadImplementation {};
@@ -398,7 +387,7 @@ struct ReaderTupleElement
 		Log.Warn() << "Read message with invalid version or message type (version " << (unsigned int)VersionID << ") with invalid message type: " << (unsigned int)MessageID;
 		assert(false);
 		return false;
-	};
+	}
 };
 
 template <typename LogType, typename ...MessageTypes> struct Reader : ReaderTupleElement<0, 0, void, MessageTypes...>
