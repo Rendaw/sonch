@@ -14,11 +14,11 @@
 //
 
 #define App "sonch"
-typedef uint64_t UUID;
 
 enum class ActionError
 {
 	OK,
+	Illegal,
 	Unknown,
 	Exists,
 	Missing,
@@ -29,7 +29,7 @@ template <typename ValueType> struct ActionResult
 {
 	ActionResult(ActionError Code) : Code(Code) { assert(Code != ActionError::OK); }
 	ActionResult(ValueType const &Value) : Code(ActionError::OK), Value(Value) { }
-	operator bool(void) { return Code == ActionError::OK; }
+	operator bool(void) const { return Code == ActionError::OK; }
 	operator ValueType(void) { assert(Code == ActionError::OK); return Value; }
 	ValueType &operator *(void) { return Value; }
 	ValueType const &operator *(void) const { return Value; }
@@ -39,11 +39,19 @@ template <typename ValueType> struct ActionResult
 	ValueType Value;
 };
 
-typedef uint64_t Counter;
-typedef uint64_t Timestamp;
+typedef StrictType(uint64_t) UUID;
+typedef StrictType(uint64_t) Counter;
+typedef StrictType(uint64_t) Timestamp;
 
 struct NodeID
 {
+	NodeID(void) : Instance((Counter::Type)0), Index((UUID::Type)0) {}
+	NodeID(Counter const &Instance, UUID const &Index) : Instance(Instance), Index(Index) {}
+	operator bool(void) const
+	{
+		assert((Instance == (Counter::Type)0) == (Index == (UUID::Type)0));
+		return (Instance != (Counter::Type)0) && (Index != (UUID::Type)0);
+	}
 	Counter Instance;
 	UUID Index;
 };
@@ -89,36 +97,96 @@ struct ShareFile : ShareFileTuple
 
 typedef ActionResult<ShareFile> GetResult;
 
+inline size_t ProtocolGetSize(ShareFile const &Argument) { return sizeof(Argument); }
+inline void ProtocolWrite(uint8_t *&Out, ShareFile const &Argument)
+{
+	memcpy(Out, &Argument, sizeof(Argument));
+	Out += sizeof(Argument);
+}
+template <typename LogType> bool ProtocolRead(LogType &Log, Protocol::VersionIDType const &VersionID, Protocol::MessageIDType const &MessageID, Protocol::BufferType const &Buffer, Protocol::SizeType &Offset, ShareFile &Data)
+{
+	if (Buffer.size() < StrictCast(Offset, size_t) + sizeof(Data))
+	{
+		Log.Debug() << "ShareFilend of file reached prematurely reading message body ShareFile size " << sizeof(Data) << ", message length doesn't match contents (version " << *VersionID << ", type " << *MessageID << ")";
+		assert(false);
+		return false;
+	}
+
+	Data = *reinterpret_cast<ShareFile const *>(&Buffer[*Offset]);
+	Offset += (Protocol::SizeType::Type)sizeof(Data);
+	return true;
+}
+
+inline size_t ProtocolGetSize(NodeID const &Argument) { return sizeof(Argument); }
+inline void ProtocolWrite(uint8_t *&Out, NodeID const &Argument)
+{
+	memcpy(Out, &Argument, sizeof(Argument));
+	Out += sizeof(Argument);
+}
+template <typename LogType> bool ProtocolRead(LogType &Log, Protocol::VersionIDType const &VersionID, Protocol::MessageIDType const &MessageID, Protocol::BufferType const &Buffer, Protocol::SizeType &Offset, NodeID &Data)
+{
+	if (Buffer.size() < StrictCast(Offset, size_t) + sizeof(Data))
+	{
+		Log.Debug() << "NodeIDnd of file reached prematurely reading message body NodeID size " << sizeof(Data) << ", message length doesn't match contents (version " << *VersionID << ", type " << *MessageID << ")";
+		assert(false);
+		return false;
+	}
+
+	Data = *reinterpret_cast<NodeID const *>(&Buffer[*Offset]);
+	Offset += (Protocol::SizeType::Type)sizeof(Data);
+	return true;
+}
+
+inline size_t ProtocolGetSize(SharePermissions const &Argument) { return sizeof(Argument); }
+inline void ProtocolWrite(uint8_t *&Out, SharePermissions const &Argument)
+{
+	memcpy(Out, &Argument, sizeof(Argument));
+	Out += sizeof(Argument);
+}
+template <typename LogType> bool ProtocolRead(LogType &Log, Protocol::VersionIDType const &VersionID, Protocol::MessageIDType const &MessageID, Protocol::BufferType const &Buffer, Protocol::SizeType &Offset, SharePermissions &Data)
+{
+	if (Buffer.size() < StrictCast(Offset, size_t) + sizeof(Data))
+	{
+		Log.Debug() << "SharePermissionsnd of file reached prematurely reading message body SharePermissions size " << sizeof(Data) << ", message length doesn't match contents (version " << *VersionID << ", type " << *MessageID << ")";
+		assert(false);
+		return false;
+	}
+
+	Data = *reinterpret_cast<SharePermissions const *>(&Buffer[*Offset]);
+	Offset += (Protocol::SizeType::Type)sizeof(Data);
+	return true;
+}
+
 struct CoreDatabaseOperations
 {
-	void Bind(sqlite3 *BareContext, sqlite3_stmt *Context, char const *Template, size_t &Index, NodeID const &Value)
+	void Bind(sqlite3 *BareContext, sqlite3_stmt *Context, char const *Template, int &Index, NodeID const &Value)
 	{
-		if (sqlite3_bind_int(Context, Index, Value.Instance) != SQLITE_OK)
+		if (sqlite3_bind_int64(Context, Index, *reinterpret_cast<int64_t const *>(&Value.Instance.Value)) != SQLITE_OK)
 			throw SystemError() << "Could not bind argument " << Index << " to \"" << Template << "\": " << sqlite3_errmsg(BareContext);
-		if (sqlite3_bind_int(Context, Index + 1, Value.Index) != SQLITE_OK)
+		if (sqlite3_bind_int64(Context, Index + 1, *reinterpret_cast<int64_t const *>(&Value.Index.Value)) != SQLITE_OK)
 			throw SystemError() << "Could not bind argument " << Index << " to \"" << Template << "\": " << sqlite3_errmsg(BareContext);
 		Index += 2;
 	}
 
-	NodeID Unbind(sqlite3_stmt *Context, size_t &Index, ::Type<NodeID>)
+	NodeID Unbind(sqlite3_stmt *Context, int &Index, ::Type<NodeID>)
 	{
-		size_t const BaseIndex = Index;
+		int const BaseIndex = Index;
 		Index += 2;
 		return
 		{
-			static_cast<Counter>(sqlite3_column_int(Context, BaseIndex)),
-			static_cast<Counter>(sqlite3_column_int(Context, BaseIndex + 1))
+			static_cast<Counter::Type>(sqlite3_column_int(Context, BaseIndex)),
+			static_cast<UUID::Type>(sqlite3_column_int(Context, BaseIndex + 1))
 		};
 	}
 
-	void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, char const *Template, size_t &Index, SharePermissions const &Value)
+	void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, char const *Template, int &Index, SharePermissions const &Value)
 	{
 		if (sqlite3_bind_blob(Context, Index, &Value, sizeof(Value), nullptr) != SQLITE_OK)
 			throw SystemError() << "Could not bind argument " << Index << " to \"" << Template << "\": " << sqlite3_errmsg(BaseContext);
 		++Index;
 	}
 
-	SharePermissions Unbind(sqlite3_stmt *Context, size_t &Index, ::Type<SharePermissions>)
+	SharePermissions Unbind(sqlite3_stmt *Context, int &Index, ::Type<SharePermissions>)
 	{
 		assert(sqlite3_column_bytes(Context, Index) == sizeof(SharePermissions));
 		return *static_cast<SharePermissions const *>(sqlite3_column_blob(Context, Index++));
@@ -145,14 +213,15 @@ struct CoreDatabase : CoreDatabaseStructure
 	Statement<ShareFileTuple(NodeID ID)> GetFileByID;
 	Statement<ShareFileTuple(NodeID Parent, std::string Name)> GetFile;
 	Statement<ShareFileTuple(NodeID Parent, Counter SplitInstance, std::string Name)> GetSplitFile;
-	Statement<ShareFileTuple(NodeID Parent, Counter Offset, Counter Limit)> GetFiles;
-	Statement<ShareFileTuple(NodeID Parent, Counter SplitInstance, Counter Offset, Counter Limit)> GetSplitFiles;
+	Statement<ShareFileTuple(NodeID Parent, unsigned int Offset, unsigned int Limit)> GetFiles;
+	Statement<ShareFileTuple(NodeID Parent, Counter SplitInstance, unsigned int Offset, unsigned int Limit)> GetSplitFiles;
 	Statement<void(NodeID ID, NodeID Parent, std::string Name, bool IsFile, Timestamp ModifiedTime, SharePermissions Permissions)> CreateFile;
 	Statement<void(NodeID ID, NodeID Change)> DeleteFile;
 	Statement<void(NodeID NewChange, SharePermissions NewPermissions, NodeID ID, NodeID Change)> SetPermissions;
 	Statement<void(NodeID NewChange, Timestamp NewModifiedTime, NodeID ID, NodeID Change)> SetTimestamp;
 	Statement<void(NodeID NewChange, NodeID NewParent, std::string NewName, NodeID ID, NodeID Change)> MoveFile;
 	Statement<void(NodeID NewChange, NodeID OldChange)> CreateChange;
+	Statement<NodeID(NodeID Change)> GetChange;
 };
 
 DefineProtocol(CoreTransactorProtocol);
@@ -171,7 +240,7 @@ DefineProtocolMessage(CTV1SetPermissions, CoreTransactorVersion1,
 DefineProtocolMessage(CTV1SetTimestamp, CoreTransactorVersion1,
 	void(
 		ShareFile File, UUID NewChangeIndex,
-		uint64_t Timestamp));
+		Timestamp NewTimestamp));
 DefineProtocolMessage(CTV1Delete, CoreTransactorVersion1,
 	void(ShareFile File));
 DefineProtocolMessage(CTV1Move, CoreTransactorVersion1,
@@ -197,13 +266,14 @@ struct ShareCore
 		bool OtherRead, bool OtherWrite, bool OtherExecute);
 	GetResult Get(NodeID const &ID);
 	GetResult Get(bfs::path const &Path);
+	NodeID GetPrecedingChange(NodeID const &Change);
 	std::vector<ShareFile> GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count);
 	void SetPermissions(ShareFile const &File,
 		bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
 		bool GroupRead, bool GroupWrite, bool GroupExecute,
 		bool OtherRead, bool OtherWrite, bool OtherExecute);
-	void SetTimestamp(ShareFile const &File, unsigned int Timestamp);
-	void Delete(ShareFile const &File);
+	void SetTimestamp(ShareFile const &File, Timestamp const &NewTimestamp);
+	ActionError Delete(ShareFile const &File);
 	ActionError Move(ShareFile const &File, bfs::path const &To);
 
 	private:
@@ -214,7 +284,6 @@ struct ShareCore
 
 		std::string InstanceName;
 		UUID InstanceID;
-		Counter InstanceIndex;
 		std::string InstanceFilename;
 
 		std::mutex Mutex;

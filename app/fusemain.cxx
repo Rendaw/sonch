@@ -39,8 +39,8 @@ void ExportAttributes(ShareFile const &File, struct stat *Output)
 	Output->st_nlink = 0;
 	Output->st_uid = Core->GetUser();
 	Output->st_gid = Core->GetGroup();
-	Output->st_mtime = File.ModifiedTime();
-	Output->st_ctime = File.ModifiedTime();
+	Output->st_mtime = StrictCast(File.ModifiedTime(), time_t);
+	Output->st_ctime = StrictCast(File.ModifiedTime(), time_t);
 }
 
 bool CanRead(ShareFile const &File)
@@ -199,7 +199,7 @@ int main(int argc, char **argv)
 	{
 		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
-		Core->SetTimestamp(*File, ts[1].tv_sec);
+		Core->SetTimestamp(*File, static_cast<Timestamp::Type>(ts[1].tv_sec));
 		/*struct timeval tv[2];
 		tv[0].tv_sec = ts[0].tv_sec;
 		tv[0].tv_usec = ts[0].tv_nsec / 1000;
@@ -244,7 +244,7 @@ int main(int argc, char **argv)
 
 		while (true)
 		{
-			auto Files = Core->GetDirectory(*File, offset, BlockCount);
+			auto Files = Core->GetDirectory(*File, static_cast<unsigned int>(offset), BlockCount);
 			unsigned int Count = 0;
 			for (auto const &File : Files)
 			{

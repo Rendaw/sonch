@@ -38,7 +38,7 @@ void AssertEquals_(std::vector<uint8_t> &Got, std::vector<uint8_t> const &Expect
 struct BufferStream
 {
 	std::vector<uint8_t> &Buffer;
-	unsigned int Offset;
+	size_t Offset;
 	bool Dead;
 	BufferStream(std::vector<uint8_t> &Buffer) : Buffer(Buffer), Offset(0), Dead(false) {}
 	BufferStream &read(char *Out, size_t Length)
@@ -73,20 +73,20 @@ DefineProtocolVersion(Proto2_1, Proto2);
 DefineProtocolMessage(Proto2_1_1, Proto2_1, void(int Val));
 
 template<size_t Value> struct Overflow : std::integral_constant<size_t, Value + std::numeric_limits<unsigned char>::max() + 1> {};
-static_assert(Proto1_1::ID == 0, "ID calculation failed");
-static_assert(Proto1_1_1::ID == 0, "ID calculation failed");
-static_assert(Proto1_1_2::ID == 1, "ID calculation failed");
-static_assert(Proto1_1_3::ID == 2, "ID calculation failed");
-static_assert(Proto1_1_4::ID == 3, "ID calculation failed");
-static_assert(Proto1_1_5::ID == 4, "ID calculation failed");
-static_assert(Proto1_1_6::ID == 5, "ID calculation failed");
-static_assert(Proto1_2::ID == 1, "ID calculation failed");
-static_assert(Proto1_2_1::ID == 0, "ID calculation failed");
-static_assert(Proto1_2_2::ID == 1, "ID calculation failed");
-static_assert(Proto1_2_3::ID == 2, "ID calculation failed");
-static_assert(Proto1_2_4::ID == 3, "ID calculation failed");
-static_assert(Proto1_2_5::ID == 4, "ID calculation failed");
-static_assert(Proto1_2_6::ID == 5, "ID calculation failed");
+static_assert(Proto1_1::ID == (Protocol::VersionIDType::Type)0, "ID calculation failed");
+static_assert(Proto1_1_1::ID == (Protocol::MessageIDType::Type)0, "ID calculation failed");
+static_assert(Proto1_1_2::ID == (Protocol::MessageIDType::Type)1, "ID calculation failed");
+static_assert(Proto1_1_3::ID == (Protocol::MessageIDType::Type)2, "ID calculation failed");
+static_assert(Proto1_1_4::ID == (Protocol::MessageIDType::Type)3, "ID calculation failed");
+static_assert(Proto1_1_5::ID == (Protocol::MessageIDType::Type)4, "ID calculation failed");
+static_assert(Proto1_1_6::ID == (Protocol::MessageIDType::Type)5, "ID calculation failed");
+static_assert(Proto1_2::ID == (Protocol::VersionIDType::Type)1, "ID calculation failed");
+static_assert(Proto1_2_1::ID == (Protocol::MessageIDType::Type)0, "ID calculation failed");
+static_assert(Proto1_2_2::ID == (Protocol::MessageIDType::Type)1, "ID calculation failed");
+static_assert(Proto1_2_3::ID == (Protocol::MessageIDType::Type)2, "ID calculation failed");
+static_assert(Proto1_2_4::ID == (Protocol::MessageIDType::Type)3, "ID calculation failed");
+static_assert(Proto1_2_5::ID == (Protocol::MessageIDType::Type)4, "ID calculation failed");
+static_assert(Proto1_2_6::ID == (Protocol::MessageIDType::Type)5, "ID calculation failed");
 
 int main(int argc, char **argv)
 {

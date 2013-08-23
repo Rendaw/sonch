@@ -2,6 +2,7 @@
 #define database_h
 
 #include "error.h"
+#include "cast.h"
 
 #include <sqlite3.h>
 #include <boost/filesystem.hpp>
@@ -126,17 +127,17 @@ template <typename Operations> struct BareSQLDatabase
 			using Operations::Unbind;
 
 			template <typename NextType, typename... RemainingTypes>
-				void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, size_t Index, NextType const &Value, RemainingTypes const &...RemainingArguments)
+				void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, int Index, NextType const &Value, RemainingTypes const &...RemainingArguments)
 			{
 				Bind(BaseContext, Context, Template, Index, Value);
 				Bind(BaseContext, Context, Index, std::forward<RemainingTypes const &>(RemainingArguments)...);
 			}
 
-			void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, size_t Index)
+			void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, int Index)
 				{ Assert(Index - 1, sqlite3_bind_parameter_count(Context)); }
 
 			template <typename NextType, typename ...RemainingTypes, typename ...ReadTypes>
-				void Unbind(sqlite3_stmt *Context, size_t Index, std::function<void(ResultTypes && ...)> const &Function, ReadTypes && ...ReadData)
+				void Unbind(sqlite3_stmt *Context, int Index, std::function<void(ResultTypes && ...)> const &Function, ReadTypes && ...ReadData)
 			{
 				auto NewValue = Unbind(Context, Index, Type<NextType>());
 				Unbind<RemainingTypes...>(
@@ -144,7 +145,7 @@ template <typename Operations> struct BareSQLDatabase
 			}
 
 			template <typename ...ReadTypes>
-				void Unbind(sqlite3_stmt *Context, size_t Index, std::function<void(ResultTypes && ...)> const &Function, ReadTypes && ...ReadData)
+				void Unbind(sqlite3_stmt *Context, int Index, std::function<void(ResultTypes && ...)> const &Function, ReadTypes && ...ReadData)
 			{
 				Assert(Index, sqlite3_column_count(Context));
 				Function(std::forward<ReadTypes>(ReadData)...);
@@ -195,27 +196,62 @@ template <typename MoreOperations> struct BaseOperations : std::conditional<std:
 	using std::conditional<std::is_class<MoreOperations>::value, MoreOperations, NoOperations>::type::Bind;
 	using std::conditional<std::is_class<MoreOperations>::value, MoreOperations, NoOperations>::type::Unbind;
 
-	void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, const char *Template, size_t &Index, std::string const &Value)
+	void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, const char *Template, int &Index, std::string const &Value)
 	{
-		if (sqlite3_bind_text(Context, Index, Value.c_str(), Value.size(), nullptr) != SQLITE_OK)
+		if (sqlite3_bind_text(Context, Index, Value.c_str(), static_cast<int>(Value.size()), nullptr) != SQLITE_OK)
 			throw SystemError() << "Could not bind argument " << Index << " to \"" << Template << "\": " << sqlite3_errmsg(BaseContext);
 		++Index;
 	}
 
-	std::string Unbind(sqlite3_stmt *Context, size_t &Index, Type<std::string>)
+	std::string Unbind(sqlite3_stmt *Context, int &Index, Type<std::string>)
 		{ return (char const *)sqlite3_column_text(Context, Index++); }
 
 	template <typename IntegerType, typename std::enable_if<std::is_integral<IntegerType>::value>::type* = nullptr>
-		void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, char const *Template, size_t &Index, IntegerType const &Value)
+		void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, char const *Template, int &Index, IntegerType const &Value)
 	{
-		if (sqlite3_bind_int(Context, Index, Value) != SQLITE_OK)
+		static_assert(sizeof(Value) <= sizeof(int64_t), "Value is too big for sqlite");
+		int Result = 0;
+		if (sizeof(Value) < sizeof(int))
+			sqlite3_bind_int(Context, Index, static_cast<int>(Value));
+		else if (sizeof(Value) == sizeof(int))
+			sqlite3_bind_int(Context, Index, *reinterpret_cast<int const *>(&Value));
+		else if (sizeof(Value) < sizeof(int64_t))
+			sqlite3_bind_int64(Context, Index, static_cast<int64_t>(Value));
+		else sqlite3_bind_int64(Context, Index, *reinterpret_cast<int64_t const *>(&Value));
+
+		if (Result != SQLITE_OK)
 			throw SystemError() << "Could not bind argument " << Index << " to \"" << Template << "\": " << sqlite3_errmsg(BaseContext);
 		++Index;
 	}
 
 	template <typename IntegerType, typename std::enable_if<std::is_integral<IntegerType>::value>::type* = nullptr>
-		IntegerType Unbind(sqlite3_stmt *Context, size_t &Index, Type<IntegerType>)
-		{ return sqlite3_column_int(Context, Index++); }
+		IntegerType Unbind(sqlite3_stmt *Context, int &Index, Type<IntegerType>)
+	{
+		static_assert(sizeof(IntegerType) <= sizeof(int64_t), "Integer type is too big for sqlite");
+		if (sizeof(IntegerType) < sizeof(int))
+			return static_cast<IntegerType>(sqlite3_column_int(Context, Index++));
+		else if (sizeof(IntegerType) == sizeof(int))
+		{
+			int const Got = sqlite3_column_int(Context, Index++);
+			return *reinterpret_cast<IntegerType const *>(&Got);
+		}
+		else if (sizeof(IntegerType) < sizeof(int64_t))
+			return static_cast<IntegerType>(sqlite3_column_int64(Context, Index++));
+		else
+		{
+			int64_t const Got = sqlite3_column_int64(Context, Index++);
+			return *reinterpret_cast<IntegerType const *>(&Got);
+		}
+	}
+
+	template <size_t ExplicitCastableUniqueness, typename ExplicitCastableType>
+		void Bind(sqlite3 *BaseContext, sqlite3_stmt *Context, const char *Template, int &Index, ExplicitCastable<ExplicitCastableUniqueness, ExplicitCastableType> const &Value)
+		{ Bind(BaseContext, Context, Template, Index, *Value); }
+
+	template <size_t ExplicitCastableUniqueness, typename ExplicitCastableType>
+		ExplicitCastable<ExplicitCastableUniqueness, ExplicitCastableType> Unbind(sqlite3_stmt *Context, int &Index, Type<ExplicitCastable<ExplicitCastableUniqueness, ExplicitCastableType>>)
+		{ return {Unbind(Context, Index, Type<ExplicitCastableType>())}; }
+
 };
 
 template <typename Derived = void> using SQLDatabase = BareSQLDatabase<BaseOperations<Derived>>;

@@ -6,14 +6,14 @@ struct E { int whatever, whatever2; };
 
 struct Operations
 {
-	void Bind(sqlite3 *BareContext, sqlite3_stmt *Context, char const *Template, size_t &Index, E const &Value)
+	void Bind(sqlite3 *BareContext, sqlite3_stmt *Context, char const *Template, int &Index, E const &Value)
 	{
 		if (sqlite3_bind_blob(Context, Index, &Value, sizeof(Value), nullptr) != SQLITE_OK)
 			throw SystemError() << "Could not bind argument " << Index << " to \"" << Template << "\": " << sqlite3_errmsg(BareContext);
 		++Index;
 	}
 
-	E Unbind(sqlite3_stmt *Context, size_t &Index, ::Type<E>)
+	E Unbind(sqlite3_stmt *Context, int &Index, ::Type<E>)
 	{
 		assert(sqlite3_column_bytes(Context, Index) == sizeof(E));
 		return *static_cast<E const *>(sqlite3_column_blob(Context, Index++));

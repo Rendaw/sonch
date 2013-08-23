@@ -4,6 +4,27 @@
 #include <cstdint>
 
 struct E { int whatever, whatever2; };
+
+inline size_t ProtocolGetSize(E const &Argument) { return sizeof(Argument); }
+inline void ProtocolWrite(uint8_t *&Out, E const &Argument)
+{
+	memcpy(Out, &Argument, sizeof(Argument));
+	Out += sizeof(Argument);
+}
+template <typename LogType> bool ProtocolRead(LogType &Log, Protocol::VersionIDType const &VersionID, Protocol::MessageIDType const &MessageID, Protocol::BufferType const &Buffer, Protocol::SizeType &Offset, E &Data)
+{
+	if (Buffer.size() < StrictCast(Offset, size_t) + sizeof(Data))
+	{
+		Log.Debug() << "End of file reached prematurely reading message body E size " << sizeof(Data) << ", message length doesn't match contents (version " << *VersionID << ", type " << *MessageID << ")";
+		assert(false);
+		return false;
+	}
+
+	Data = *reinterpret_cast<E const *>(&Buffer[*Offset]);
+	Offset += (Protocol::SizeType::Type)sizeof(E);
+	return true;
+}
+
 DefineProtocol(TransactionProtocol);
 DefineProtocolVersion(TransProtoVersion, TransactionProtocol);
 DefineProtocolMessage(Event1Type, TransProtoVersion, void(int a, bool b, bool b2, uint64_t c, std::string d, E e));

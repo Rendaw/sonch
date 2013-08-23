@@ -26,8 +26,19 @@ template <int InternalID> inline std::ostream& operator <<(std::ostream &Out, Er
 typedef ErrorBase UserError;
 typedef ErrorBase SystemError;
 
-template <typename Type> inline void Assert(Type const &Value) { assert(Value); }
-template <typename Type1, typename Type2> inline void Assert(Type1 const &Value1, Type2 const &Value2) { assert(Value1 == Value2); }
+template <typename Type> inline void Assert(Type const &Value)
+{
+#ifndef NDEBUG
+	if (!Value) throw false;
+#endif
+}
+
+template <typename GotType, typename ExpectedType> inline void Assert(GotType const &Got, ExpectedType const &Expected)
+{
+#ifndef NDEBUG
+	if (Got != Expected) throw false;
+#endif
+}
 
 struct Cleanup
 {

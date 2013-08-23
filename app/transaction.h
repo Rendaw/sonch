@@ -46,7 +46,7 @@ template <typename ...MessageTypes> struct Transactor
 		bfs::ofstream Out(ThreadPath, std::ofstream::out | std::ofstream::binary);
 		if (!Out) throw SystemError() << "Could not create file " << ThreadPath << ".";
 		auto const &Data = MessageType::Write(Arguments...);
-		Out.write((char const *)&Data[0], Data.size());
+		Out.write((char const *)&Data[0], static_cast<std::streamsize>(Data.size()));
 		{
 			std::lock_guard<std::mutex> Guard(CoreMutex);
 			Reader.template Call<MessageType>(std::forward<ArgumentTypes const &>(Arguments)...);
