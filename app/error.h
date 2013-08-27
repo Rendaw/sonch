@@ -5,6 +5,7 @@
 #include <sstream>
 #include <functional>
 #include <cassert>
+#include <iostream>
 
 template <int InternalID> struct ErrorBase
 {
@@ -26,19 +27,32 @@ template <int InternalID> inline std::ostream& operator <<(std::ostream &Out, Er
 typedef ErrorBase UserError;
 typedef ErrorBase SystemError;
 
-template <typename Type> inline void Assert(Type const &Value)
+inline void AssertStamp(char const *File, char const *Function, int Line)
+	{ std::cerr << File << "/" << Function << ":" << Line << " Assertion failed" << std::endl; }
+
+template <typename Type> inline void AssertImplementation(char const *File, char const *Function, int Line, Type const &Value)
 {
 #ifndef NDEBUG
-	if (!Value) throw false;
+	if (!Value)
+	{
+		AssertStamp(File, Function, Line);
+		throw false;
+	}
 #endif
 }
 
-template <typename GotType, typename ExpectedType> inline void Assert(GotType const &Got, ExpectedType const &Expected)
+template <typename GotType, typename ExpectedType> inline void AssertImplementation(char const *File, char const *Function, int Line, GotType const &Got, ExpectedType const &Expected)
 {
 #ifndef NDEBUG
-	if (Got != Expected) throw false;
+	if (Got != Expected)
+	{
+		AssertStamp(File, Function, Line);
+		throw false;
+	}
 #endif
 }
+
+#define Assert(...) AssertImplementation(__FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 
 struct Cleanup
 {

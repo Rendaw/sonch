@@ -1,9 +1,17 @@
 #include "../app/core.h"
 
-int main(int, char)
+#include <algorithm>
+
+int main(int, char **)
 {
 	bfs::path RootPath("core1root");
-	Cleanup Cleanup([&]() { boost::filesystem::remove_all(RootPath); });
+	Cleanup Cleanup([&]()
+	{
+		bfs::ifstream Log(RootPath / "log.txt");
+		std::copy(std::istreambuf_iterator<char>(Log), std::istreambuf_iterator<char>(), std::ostreambuf_iterator<char>(std::cerr));
+		std::cerr << std::flush;
+		boost::filesystem::remove_all(RootPath);
+	});
 
 	try
 	{
