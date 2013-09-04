@@ -52,25 +52,25 @@ struct BufferStream
 	bool operator!(void) { return Dead; }
 };
 
-DefineProtocol(Proto1);
-DefineProtocolVersion(Proto1_1, Proto1);
+DefineProtocol(Proto1)
+DefineProtocolVersion(Proto1_1, Proto1)
 DefineProtocolMessage(Proto1_1_1, Proto1_1, void(int Val))
-DefineProtocolMessage(Proto1_1_2, Proto1_1, void(unsigned int Val));
-DefineProtocolMessage(Proto1_1_3, Proto1_1, void(uint64_t Val));
-DefineProtocolMessage(Proto1_1_4, Proto1_1, void(bool Val));
-DefineProtocolMessage(Proto1_1_5, Proto1_1, void(std::string Val));
-DefineProtocolMessage(Proto1_1_6, Proto1_1, void(std::vector<uint8_t> Val));
-DefineProtocolVersion(Proto1_2, Proto1);
-DefineProtocolMessage(Proto1_2_1, Proto1_2, void(bool Space, int Val));
-DefineProtocolMessage(Proto1_2_2, Proto1_2, void(bool Space, unsigned int Val));
-DefineProtocolMessage(Proto1_2_3, Proto1_2, void(bool Space, uint64_t Val));
-DefineProtocolMessage(Proto1_2_4, Proto1_2, void(bool Space, bool Val));
-DefineProtocolMessage(Proto1_2_5, Proto1_2, void(bool Space, std::string Val));
-DefineProtocolMessage(Proto1_2_6, Proto1_2, void(bool Space, std::vector<uint8_t> Val));
+DefineProtocolMessage(Proto1_1_2, Proto1_1, void(unsigned int Val))
+DefineProtocolMessage(Proto1_1_3, Proto1_1, void(uint64_t Val))
+DefineProtocolMessage(Proto1_1_4, Proto1_1, void(bool Val))
+DefineProtocolMessage(Proto1_1_5, Proto1_1, void(std::string Val))
+DefineProtocolMessage(Proto1_1_6, Proto1_1, void(std::vector<uint8_t> Val))
+DefineProtocolVersion(Proto1_2, Proto1)
+DefineProtocolMessage(Proto1_2_1, Proto1_2, void(bool Space, int Val))
+DefineProtocolMessage(Proto1_2_2, Proto1_2, void(bool Space, unsigned int Val))
+DefineProtocolMessage(Proto1_2_3, Proto1_2, void(bool Space, uint64_t Val))
+DefineProtocolMessage(Proto1_2_4, Proto1_2, void(bool Space, bool Val))
+DefineProtocolMessage(Proto1_2_5, Proto1_2, void(bool Space, std::string Val))
+DefineProtocolMessage(Proto1_2_6, Proto1_2, void(bool Space, std::vector<uint8_t> Val))
 
-DefineProtocol(Proto2);
-DefineProtocolVersion(Proto2_1, Proto2);
-DefineProtocolMessage(Proto2_1_1, Proto2_1, void(int Val));
+DefineProtocol(Proto2)
+DefineProtocolVersion(Proto2_1, Proto2)
+DefineProtocolMessage(Proto2_1_1, Proto2_1, void(int Val))
 
 template<size_t Value> struct Overflow : std::integral_constant<size_t, Value + std::numeric_limits<unsigned char>::max() + 1> {};
 static_assert(Proto1_1::ID == (Protocol::VersionIDType::Type)0, "ID calculation failed");

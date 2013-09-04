@@ -25,10 +25,10 @@ template <typename LogType> bool ProtocolRead(LogType &Log, Protocol::VersionIDT
 	return true;
 }
 
-DefineProtocol(TransactionProtocol);
-DefineProtocolVersion(TransProtoVersion, TransactionProtocol);
-DefineProtocolMessage(Event1Type, TransProtoVersion, void(int a, bool b, bool b2, uint64_t c, std::string d, E e));
-DefineProtocolMessage(Event2Type, TransProtoVersion, void(int q, int r, int l, int m, int v));
+DefineProtocol(TransactionProtocol)
+DefineProtocolVersion(TransProtoVersion, TransactionProtocol)
+DefineProtocolMessage(Event1Type, TransProtoVersion, void(int a, bool b, bool b2, uint64_t c, std::string d, E e))
+DefineProtocolMessage(Event2Type, TransProtoVersion, void(int q, int r, int l, int m, int v))
 
 int main(int argc, char **argv)
 {
@@ -46,11 +46,9 @@ int main(int argc, char **argv)
 		bool b2 = false;
 		uint64_t c = 221;
 		std::string d = "all good";
-		E e, e2;
+		E e;
 		e.whatever = 88;
 		e.whatever2 = 2842967;
-		e2.whatever = 2929;
-		e2.whatever2 = -222;
 
 		bool Fail = false;
 

@@ -25,8 +25,8 @@ Messages are completely redefined for each new version.
 #include <typeinfo>
 
 #define DefineProtocol(Name) typedef Protocol::Protocol<__COUNTER__> Name;
-#define DefineProtocolVersion(Name, InProtocol) typedef Protocol::Version<GetConstCount(InProtocol), InProtocol> Name; IncrementConstCount(InProtocol);
-#define DefineProtocolMessage(Name, InVersion, Signature) typedef Protocol::Message<GetConstCount(InVersion), InVersion, Signature> Name; IncrementConstCount(InVersion);
+#define DefineProtocolVersion(Name, InProtocol) typedef Protocol::Version<static_cast<Protocol::VersionIDType::Type>(GetConstCount(InProtocol)), InProtocol> Name; IncrementConstCount(InProtocol)
+#define DefineProtocolMessage(Name, InVersion, Signature) typedef Protocol::Message<static_cast<Protocol::MessageIDType::Type>(GetConstCount(InVersion)), InVersion, Signature> Name; IncrementConstCount(InVersion)
 
 namespace Protocol
 {
@@ -111,7 +111,7 @@ template <typename LogType, typename IntType> bool ProtocolRead(LogType &Log, Pr
 	}
 
 	Data = *reinterpret_cast<IntType const *>(&Buffer[*Offset]);
-	Offset += (Protocol::SizeType::Type)sizeof(IntType);
+	Offset += static_cast<Protocol::SizeType::Type>(sizeof(IntType));
 	return true;
 }
 
@@ -124,7 +124,7 @@ template <typename LogType> bool ProtocolRead(LogType &Log, Protocol::VersionIDT
 		return false;
 	}
 	Protocol::ArraySizeType::Type const &Size = *reinterpret_cast<Protocol::ArraySizeType::Type const *>(&Buffer[*Offset]);
-	Offset += (Protocol::SizeType::Type)sizeof(Size);
+	Offset += static_cast<Protocol::SizeType::Type>(sizeof(Size));
 	if (Buffer.size() < StrictCast(Offset, size_t) + (size_t)Size)
 	{
 		Log.Debug() << "End of file reached prematurely reading message body string body size " << Size << ", message length doesn't match contents (version " << *VersionID << ", type " << *MessageID << ")";
@@ -146,7 +146,7 @@ template <typename LogType, typename ElementType, typename std::enable_if<!std::
 		return false;
 	}
 	Protocol::ArraySizeType::Type const &Size = *reinterpret_cast<Protocol::ArraySizeType::Type const *>(&Buffer[*Offset]);
-	Offset += (Protocol::SizeType::Type)sizeof(Size);
+	Offset += static_cast<Protocol::SizeType::Type>(sizeof(Size));
 	if (Buffer.size() < StrictCast(Offset, size_t) + Size * sizeof(ElementType))
 	{
 		Log.Debug() << "End of file reached prematurely reading message body array body size " << Size << ", message length doesn't match contents (version " << *VersionID << ", type " << *MessageID << ")";
@@ -155,7 +155,7 @@ template <typename LogType, typename ElementType, typename std::enable_if<!std::
 	}
 	Data.resize(Size);
 	memcpy(&Data[0], &Buffer[*Offset], Size * sizeof(ElementType));
-	Offset += (Protocol::SizeType::Type)(Size * sizeof(ElementType));
+	Offset += static_cast<Protocol::SizeType::Type>(Size * sizeof(ElementType));
 	return true;
 }
 
@@ -169,7 +169,7 @@ template <typename LogType, typename ElementType, typename std::enable_if<std::i
 		return false;
 	}
 	Protocol::ArraySizeType::Type const &Size = *reinterpret_cast<Protocol::ArraySizeType::Type const *>(&Buffer[*Offset]);
-	Offset += (Protocol::SizeType::Type)sizeof(Size);
+	Offset += static_cast<Protocol::SizeType::Type>(sizeof(Size));
 	if (Buffer.size() < StrictCast(Offset, size_t) + (size_t)Size)
 	{
 		Log.Debug() << "End of file reached prematurely reading message body array body size " << Size << ", message length doesn't match contents (version " << *VersionID << ", type " << *MessageID << ")";

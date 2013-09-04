@@ -7,9 +7,9 @@
 #define HostInstanceIndex static_cast<Counter::Type>(0)
 #define NullIndex static_cast<UUID::Type>(0)
 
-DefineProtocol(StaticDataProtocol);
-DefineProtocolVersion(StaticDataV1, StaticDataProtocol);
-DefineProtocolMessage(StaticDataV1All, StaticDataV1, void(std::string InstanceName, UUID InstanceUUID));
+DefineProtocol(StaticDataProtocol)
+DefineProtocolVersion(StaticDataV1, StaticDataProtocol)
+DefineProtocolMessage(StaticDataV1All, StaticDataV1, void(std::string InstanceName, UUID InstanceUUID))
 
 enum class DatabaseVersion : unsigned int
 {
@@ -120,7 +120,7 @@ CoreDatabase::CoreDatabase(bfs::path const &DatabasePath, bool Create, std::stri
 		("SELECT \"ParentInstance\", \"ParentIndex\" FROM \"Ancestry\" WHERE \"IDInstance\" = ? AND \"IDIndex\" = ?"))
 {
 	if (Create)
-		CreateFile(NodeID(), NodeID(), "", false, static_cast<Timestamp::Type>(std::time(nullptr)), SharePermissions{1, 1, 1, 1, 0, 1, 1, 0, 1});
+		CreateFile(NodeID(), NodeID(), "", false, static_cast<Timestamp::Type>(std::time(nullptr)), SharePermissions{1, 1});
 }
 
 static std::string GetInternalFilename(NodeID const &ID, NodeID const &Change)
@@ -129,7 +129,7 @@ static std::string GetInternalFilename(NodeID const &ID, NodeID const &Change)
 ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName) :
 	Root(Root), FilePath(Root / "." App / "files"),
 	InstanceName(InstanceName),
-	SplitFile(NodeID(), NodeID(), NodeID(), SplitDir, false, static_cast<Timestamp::Type>(0), SharePermissions{1, 1, 1, 1, 1, 1, 1, 1, 1}, false)
+	SplitFile(NodeID(), NodeID(), NodeID(), SplitDir, false, static_cast<Timestamp::Type>(0), SharePermissions{1, 1}, false)
 {
 	auto const ValidateFilename = [](std::string const &Filename)
 	{
@@ -157,8 +157,8 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName) :
 		Buffer[Name.size()] = '-';
 		for (unsigned int Offset = 0; Offset < sizeof(ID); ++Offset)
 		{
-			Buffer[Name.size() + 1 + Offset * 2] = 'a' + (*(reinterpret_cast<char *>(&ID) + Offset) & 0xF);
-			Buffer[Name.size() + 1 + Offset * 2 + 1] = 'a' + ((*(reinterpret_cast<char *>(&ID) + Offset) & 0xF0) >> 4);
+			Buffer[Name.size() + 1 + Offset * 2] = 'a' + static_cast<char>((*(reinterpret_cast<char *>(&ID) + Offset) & 0xF));
+			Buffer[Name.size() + 1 + Offset * 2 + 1] = 'a' + static_cast<char>(((*(reinterpret_cast<char *>(&ID) + Offset) & 0xF0) >> 4));
 		}
 		return std::string(Buffer.begin(), Buffer.end());
 	};
@@ -265,16 +265,11 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName) :
 
 		Transaction.SetPermissions = [this](
 			ShareFile const &File, UUID const &NewChangeIndex,
-			bool const &OwnerRead, bool const &OwnerWrite, bool const &OwnerExecute,
-			bool const &GroupRead, bool const &GroupWrite, bool const &GroupExecute,
-			bool const &OtherRead, bool const &OtherWrite, bool const &OtherExecute)
+			bool const &CanWrite, bool const &CanExecute)
 		{
 			Database->SetPermissions(
 				{HostInstanceIndex, NewChangeIndex},
-				SharePermissions{
-					OwnerRead, OwnerWrite, OwnerExecute,
-					GroupRead, GroupWrite, GroupExecute,
-					OtherRead, OtherWrite, OtherExecute},
+				SharePermissions{CanWrite, CanExecute},
 				File.ID(), File.Change());
 			Database->CreateChange({HostInstanceIndex, NewChangeIndex}, File.Change());
 			if (File.IsFile())
@@ -330,10 +325,6 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName) :
 
 bfs::path ShareCore::GetRoot(void) const { return Root; }
 
-unsigned int ShareCore::GetUser(void) const { return geteuid(); }
-
-unsigned int ShareCore::GetGroup(void) const { return geteuid(); }
-
 bfs::path ShareCore::GetRealPath(ShareFile const &File) const
 {
 	assert(File.IsFile());
@@ -353,10 +344,10 @@ GetResult ShareCore::Get(bfs::path const &Path)
 	auto ParentFile = Database->GetFile({HostInstanceIndex, NullIndex}, "");
 	assert(ParentFile);
 	bfs::path::iterator PathIterator = ++Path.begin();
-	if (PathIterator == Path.end()) return {ShareFile(*ParentFile)};
+	if (IsRootPath(Path)) return {ShareFile(*ParentFile)};
 
 	Counter SplitInstance = HostInstanceIndex;
-	if (*PathIterator == SplitDir)
+	if (IsSplitPath(Path))
 	{
 		if (++PathIterator == Path.end()) return SplitFile;
 		auto GotInstance = Database->GetInstanceIndex(PathIterator->string());
@@ -415,10 +406,7 @@ std::vector<ShareFile> ShareCore::GetDirectory(ShareFile const &File, unsigned i
 	return Out;
 }
 
-ActionResult<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile,
-	bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
-	bool GroupRead, bool GroupWrite, bool GroupExecute,
-	bool OtherRead, bool OtherWrite, bool OtherExecute)
+ActionResult<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile, bool CanWrite, bool CanExecute)
 {
 	Database->Begin();
 	UUID FileIndex = *Database->GetFileIndex();
@@ -430,11 +418,7 @@ ActionResult<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile,
 	ShareFile Out(
 		{HostInstanceIndex, FileIndex}, Parent->ID(), {},
 		Path.filename().string(), IsFile, static_cast<Timestamp::Type>(std::time(nullptr)),
-		{
-			OwnerRead, OwnerWrite, OwnerExecute,
-			GroupRead, GroupWrite, GroupExecute,
-			OtherRead, OtherWrite, OtherExecute
-		},
+		{CanWrite, CanExecute},
 		false);
 	(*Transact)(CTV1Create(), Out.ID().Index, Out.Parent(), Out.Name(), Out.IsFile(), Out.Permissions());
 	Log->Debug() << "Created file " << HostInstanceIndex << " " << *FileIndex << " / 0 0";
@@ -442,9 +426,7 @@ ActionResult<ShareFile> ShareCore::Create(bfs::path const &Path, bool IsFile,
 }
 
 void ShareCore::SetPermissions(ShareFile const &File,
-	bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
-	bool GroupRead, bool GroupWrite, bool GroupExecute,
-	bool OtherRead, bool OtherWrite, bool OtherExecute)
+	bool CanWrite, bool CanExecute)
 {
 	Database->Begin();
 	UUID ChangeIndex = *Database->GetChangeIndex();
@@ -452,9 +434,7 @@ void ShareCore::SetPermissions(ShareFile const &File,
 	Database->End();
 	(*Transact)(CTV1SetPermissions(),
 		File, ChangeIndex,
-		OwnerRead, OwnerWrite, OwnerExecute,
-		GroupRead, GroupWrite, GroupExecute,
-		OtherRead, OtherWrite, OtherExecute);
+		CanWrite, CanExecute);
 	Log->Debug() << "Changed file " << *File.ID().Instance << " " << *File.ID().Index << " / " <<
 		*File.Change().Instance << " " << *File.Change().Index << " -> " << HostInstanceIndex << " " << *ChangeIndex;
 }
@@ -479,8 +459,10 @@ ActionError ShareCore::Delete(ShareFile const &File)
 	return ActionError::OK;
 }
 
-ActionError ShareCore::Move(ShareFile const &File, bfs::path const &To)
+ActionError ShareCore::Move(bfs::path const &From, bfs::path const &To)
 {
+	if (IsRootPath(From)) return ActionError::Invalid;
+	if (IsSplitPath(From)) return ActionError::Invalid;
 	Database->Begin();
 	UUID ChangeIndex = *Database->GetChangeIndex();
 	Database->IncrementChangeIndex();
@@ -505,7 +487,20 @@ ActionError ShareCore::Move(ShareFile const &File, bfs::path const &To)
 	return ActionError::OK;
 }
 
+bool ShareCore::IsRootPath(bfs::path const &Path) 
+{ 
+	bfs::path::iterator PathIterator = ++Path.begin();
+	return (PathIterator == Path.end());
+}
+
+bool ShareCore::IsSplitPath(bfs::path const &Path)
+{
+	bfs::path::iterator PathIterator = ++Path.begin();
+	if (PathIterator == Path.end()) return false;
+	return *PathIterator == SplitDir;
+}
+
 ShareFile ShareCore::SplitInstanceFile(Counter Index)
 {
-	return std::forward_as_tuple(NodeID(), NodeID(), NodeID(), String() << *Index, false, Timestamp::Type(0), SharePermissions{1, 1, 1, 1, 1, 1, 1, 1, 1}, false);
+	return std::forward_as_tuple(NodeID(), NodeID(), NodeID(), String() << *Index, false, Timestamp::Type(0), SharePermissions{1, 1}, false);
 }

@@ -44,9 +44,9 @@ template <size_t Uniqueness, typename ValueType> struct ExplicitCastable<Uniquen
 	constexpr ThisType operator /(ValueType const &That) const { return Value / That; }
 	template <typename ThatType> ThisType operator /(ThatType const &) const = delete;
 
+	template <typename ThatType> ThisType operator +=(ThatType const &) = delete;
 	ThisType operator +=(ThisType const &That) { return Value += *That; }
 	ThisType operator +=(ValueType const &That) { return Value += That; }
-	template <typename ThatType> ThisType operator +=(ThatType const &) = delete;
 
 	ThisType operator ++(void) { return ++**this; }
 

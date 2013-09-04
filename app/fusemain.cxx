@@ -27,44 +27,20 @@ void ExportAttributes(ShareFile const &File, struct stat *Output)
 {
 	Output->st_mode =
 		(File.IsFile() ? S_IFREG : S_IFDIR) |
-		(File.OwnerRead() ? S_IRUSR : 0) |
-		(File.OwnerWrite() ? S_IWUSR : 0) |
-		(File.OwnerExecute() ? S_IXUSR : 0) |
-		(File.GroupRead() ? S_IRGRP : 0) |
-		(File.GroupWrite() ? S_IWGRP : 0) |
-		(File.GroupExecute() ? S_IXGRP : 0) |
-		(File.OtherRead() ? S_IROTH : 0) |
-		(File.OtherWrite() ? S_IWOTH : 0) |
-		(File.OtherExecute() ? S_IXOTH : 0);
+		S_IRUSR |
+		(File.CanWrite() ? S_IWUSR : 0) |
+		(File.CanExecute() ? S_IXUSR : 0) |
+		S_IRGRP | 
+		(File.CanWrite() ? S_IWGRP : 0) |
+		(File.CanExecute() ? S_IXGRP : 0) |
+		S_IROTH |
+		(File.CanWrite() ? S_IWOTH : 0) |
+		(File.CanExecute() ? S_IXOTH : 0);
 	Output->st_nlink = 0;
-	Output->st_uid = Core->GetUser();
-	Output->st_gid = Core->GetGroup();
+	Output->st_uid = getuid();
+	Output->st_gid = getgid();
 	Output->st_mtime = StrictCast(File.ModifiedTime(), time_t);
 	Output->st_ctime = StrictCast(File.ModifiedTime(), time_t);
-}
-
-bool CanRead(ShareFile const &File)
-{
-	return
-		(File.OwnerRead() && (Core->GetUser() == fuse_get_context()->uid)) ||
-		(File.GroupRead() && (Core->GetGroup() == fuse_get_context()->gid)) ||
-		(File.OtherRead());
-}
-
-bool CanWrite(ShareFile const &File)
-{
-	return
-		(File.OwnerWrite() && (Core->GetUser() == fuse_get_context()->uid)) ||
-		(File.GroupWrite() && (Core->GetGroup() == fuse_get_context()->gid)) ||
-		(File.OtherWrite());
-}
-
-bool CanExecute(ShareFile const &File)
-{
-	return
-		(File.OwnerExecute() && (Core->GetUser() == fuse_get_context()->uid)) ||
-		(File.GroupExecute() && (Core->GetGroup() == fuse_get_context()->gid)) ||
-		(File.OtherExecute());
 }
 
 /*struct FileContext
@@ -155,9 +131,9 @@ int main(int argc, char **argv)
 		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
 		if (
-			(!(mask & R_OK) || CanRead(*File)) &&
-			(!(mask & W_OK) || CanWrite(*File)) &&
-			(!(mask & X_OK) || CanExecute(*File))
+			!(mask & R_OK) &&
+			(!(mask & W_OK) || File->CanWrite()) &&
+			(!(mask & X_OK) || File->CanExecute())
 		) return 0;
 		return -EACCES;
 	};
@@ -172,9 +148,7 @@ int main(int argc, char **argv)
 	// Directory or file changes
 	FuseCallbacks.rename = [](const char *from, const char *to)
 	{
-		GetResult From = Core->Get(from);
-		if (!From) return -ENOENT;
-		switch (Core->Move(*From, to))
+		switch (Core->Move(from, to))
 		{
 			case ActionError::OK: break;
 			case ActionError::Invalid: return -ENOTDIR;
@@ -188,10 +162,7 @@ int main(int argc, char **argv)
 	{
 		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
-		Core->SetPermissions(*File,
-			mode & S_IRUSR, mode & S_IWUSR, mode & S_IXUSR,
-			mode & S_IRGRP, mode & S_IWGRP, mode & S_IXGRP,
-			mode & S_IROTH, mode & S_IWOTH, mode & S_IXOTH);
+		Core->SetPermissions(*File, mode & S_IWUSR, mode & S_IXUSR);
 		return 0;
 	};
 
@@ -212,10 +183,7 @@ int main(int argc, char **argv)
 	// Directory access
 	FuseCallbacks.mkdir = [](const char *path, mode_t mode)
 	{
-		auto Result = Core->Create(path, false,
-			mode & S_IRUSR, mode & S_IWUSR, mode & S_IXUSR,
-			mode & S_IRGRP, mode & S_IWGRP, mode & S_IXGRP,
-			mode & S_IROTH, mode & S_IWOTH, mode & S_IXOTH);
+		auto Result = Core->Create(path, false, mode & S_IWUSR, mode & S_IXUSR);
 		switch (Result.Code)
 		{
 			case ActionError::OK: break;
@@ -230,8 +198,7 @@ int main(int argc, char **argv)
 		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
 		if (File->IsFile()) return -ENOTDIR;
-		if (((fi->flags & O_WRONLY) || (fi->flags & O_RDWR)) && !CanWrite(*File)) return -EACCES;
-		if (((fi->flags & O_RDONLY) || (fi->flags & O_RDWR)) && !CanRead(*File)) return -EACCES;
+		if (((fi->flags & O_WRONLY) || (fi->flags & O_RDWR)) && !File->CanWrite()) return -EACCES;
 		fi->fh = reinterpret_cast<decltype(fi->fh)>(new ShareFile(*File));
 		return 0;
 	};

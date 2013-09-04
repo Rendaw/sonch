@@ -59,7 +59,7 @@ template <typename ...MessageTypes> struct Transactor
 
 	private:
 		std::mutex &CoreMutex;
-		bfs::path const &TransactionPath;
+		bfs::path TransactionPath;
 		StandardOutLog Log;
 		Protocol::Reader<StandardOutLog, MessageTypes...> Reader;
 };

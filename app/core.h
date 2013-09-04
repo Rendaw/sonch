@@ -59,15 +59,8 @@ struct NodeID
 #include "shared.h"
 struct SharePermissions
 {
-	unsigned OwnerRead : 1;
-	unsigned OwnerWrite : 1;
-	unsigned OwnerExecute : 1;
-	unsigned GroupRead : 1;
-	unsigned GroupWrite : 1;
-	unsigned GroupExecute : 1;
-	unsigned OtherRead : 1;
-	unsigned OtherWrite : 1;
-	unsigned OtherExecute : 1;
+	unsigned CanWrite : 1;
+	unsigned CanExecute : 1;
 };
 
 typedef std::tuple<NodeID, NodeID, NodeID, std::string, bool, Timestamp, SharePermissions, bool> ShareFileTuple;
@@ -84,15 +77,8 @@ struct ShareFile : ShareFileTuple
 	inline SharePermissions const &Permissions(void) const { return std::get<6>(*this); }
 	inline bool const &IsSplit(void) const { return std::get<7>(*this); }
 
-	inline bool OwnerRead(void) const { return Permissions().OwnerRead; }
-	inline bool OwnerWrite(void) const { return Permissions().OwnerWrite; }
-	inline bool OwnerExecute(void) const { return Permissions().OwnerExecute; }
-	inline bool GroupRead(void) const { return Permissions().GroupRead; }
-	inline bool GroupWrite(void) const { return Permissions().GroupWrite; }
-	inline bool GroupExecute(void) const { return Permissions().GroupExecute; }
-	inline bool OtherRead(void) const { return Permissions().OtherRead; }
-	inline bool OtherWrite(void) const { return Permissions().OtherWrite; }
-	inline bool OtherExecute(void) const { return Permissions().OtherExecute; }
+	inline bool CanWrite(void) const { return Permissions().CanWrite; }
+	inline bool CanExecute(void) const { return Permissions().CanExecute; }
 };
 
 typedef ActionResult<ShareFile> GetResult;
@@ -224,30 +210,28 @@ struct CoreDatabase : CoreDatabaseStructure
 	Statement<NodeID(NodeID Change)> GetChange;
 };
 
-DefineProtocol(CoreTransactorProtocol);
-DefineProtocolVersion(CoreTransactorVersion1, CoreTransactorProtocol);
+DefineProtocol(CoreTransactorProtocol)
+DefineProtocolVersion(CoreTransactorVersion1, CoreTransactorProtocol)
 DefineProtocolMessage(CTV1Create, CoreTransactorVersion1,
 	void(
 		UUID ID,
 		NodeID Parent, std::string Name, bool IsFile,
-		SharePermissions Permissions));
+		SharePermissions Permissions))
 DefineProtocolMessage(CTV1SetPermissions, CoreTransactorVersion1,
 	void(
 		ShareFile File, UUID NewChangeIndex,
-		bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
-		bool GroupRead, bool GroupWrite, bool GroupExecute,
-		bool OtherRead, bool OtherWrite, bool OtherExecute));
+		bool CanWrite, bool CanExecute))
 DefineProtocolMessage(CTV1SetTimestamp, CoreTransactorVersion1,
 	void(
 		ShareFile File, UUID NewChangeIndex,
-		Timestamp NewTimestamp));
+		Timestamp NewTimestamp))
 DefineProtocolMessage(CTV1Delete, CoreTransactorVersion1,
-	void(ShareFile File));
+	void(ShareFile File))
 DefineProtocolMessage(CTV1Move, CoreTransactorVersion1,
 	void(
 		ShareFile File, UUID NewChangeIndex,
 		NodeID ParentID,
-		std::string Name));
+		std::string Name))
 
 struct ShareCore
 {
@@ -255,28 +239,23 @@ struct ShareCore
 
 	bfs::path GetRoot(void) const;
 
-	unsigned int GetUser(void) const;
-	unsigned int GetGroup(void) const;
-
 	bfs::path GetRealPath(ShareFile const &File) const;
 
-	ActionResult<ShareFile> Create(bfs::path const &Path, bool IsFile,
-		bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
-		bool GroupRead, bool GroupWrite, bool GroupExecute,
-		bool OtherRead, bool OtherWrite, bool OtherExecute);
+	ActionResult<ShareFile> Create(bfs::path const &Path, bool IsFile, bool CanWrite, bool CanExecute);
 	GetResult Get(NodeID const &ID);
 	GetResult Get(bfs::path const &Path);
 	NodeID GetPrecedingChange(NodeID const &Change);
 	std::vector<ShareFile> GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count);
-	void SetPermissions(ShareFile const &File,
-		bool OwnerRead, bool OwnerWrite, bool OwnerExecute,
-		bool GroupRead, bool GroupWrite, bool GroupExecute,
-		bool OtherRead, bool OtherWrite, bool OtherExecute);
+	void SetPermissions(ShareFile const &File, bool CanWrite, bool CanExecute);
 	void SetTimestamp(ShareFile const &File, Timestamp const &NewTimestamp);
 	ActionError Delete(ShareFile const &File);
-	ActionError Move(ShareFile const &File, bfs::path const &To);
+	ActionError Move(bfs::path const &From, bfs::path const &To);
 
 	private:
+		bool IsRootPath(bfs::path const &Path);
+		bool IsSplitPath(bfs::path const &Path);
+		ShareFile SplitInstanceFile(Counter Index);
+	  
 		bfs::path const Root;
 		bfs::path const FilePath;
 
@@ -288,7 +267,6 @@ struct ShareCore
 
 		std::mutex Mutex;
 
-		ShareFile SplitInstanceFile(Counter Index);
 		ShareFile SplitFile;
 
 		std::unique_ptr<CoreDatabase> Database;

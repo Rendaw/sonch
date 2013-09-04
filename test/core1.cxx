@@ -4,17 +4,17 @@
 
 int main(int, char **)
 {
-	bfs::path RootPath("core1root");
-	Cleanup Cleanup([&]()
-	{
-		bfs::ifstream Log(RootPath / "log.txt");
-		std::copy(std::istreambuf_iterator<char>(Log), std::istreambuf_iterator<char>(), std::ostreambuf_iterator<char>(std::cerr));
-		std::cerr << std::flush;
-		boost::filesystem::remove_all(RootPath);
-	});
-
 	try
 	{
+		bfs::path RootPath("core1root");
+		Cleanup Cleanup([&]()
+		{
+			bfs::ifstream Log(RootPath / "log.txt");
+			std::copy(std::istreambuf_iterator<char>(Log), std::istreambuf_iterator<char>(), std::ostreambuf_iterator<char>(std::cerr));
+			std::cerr << std::flush;
+			boost::filesystem::remove_all(RootPath);
+		});
+
 		ShareCore Core(RootPath, "core1instance1");
 
 		// Get root, (fail) special directories, check permissions
@@ -51,7 +51,7 @@ int main(int, char **)
 
 		// Create dir (good, bad path, not in splits, not already exists)
 		bfs::path DirPath("/dir");
-		auto Dir = Core.Create(DirPath, false, true, true, true, false, false, false, false, false, false);
+		auto Dir = Core.Create(DirPath, false, true, true);
 		Assert(Dir);
 		Assert(Dir->ID().Instance, Counter::Type(0));
 		Assert(Dir->ID().Index, UUID::Type(1));
@@ -70,6 +70,6 @@ int main(int, char **)
 	}
 	catch (SystemError const &Error) { std::cerr << Error << std::endl; return 1; }
 	catch (UserError const &Error) { std::cerr << Error << std::endl; return 1; }
-	catch (...) { std::cerr << "Encountered unexpected error." << std::endl; return 1; }
+	catch (...) { std::cerr << "Encountered unexpected error." << std::endl; throw; }
 	return 0;
 }
