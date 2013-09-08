@@ -38,7 +38,6 @@ int main(int argc, char **argv)
 		bfs::create_directory(TransactionPath);
 		Cleanup Cleanup([&TransactionPath]() { try { bfs::remove_all(TransactionPath); } catch (...) {} });
 
-		std::mutex MainMutex;
 		int Counter = 0;
 
 		int a = 23;
@@ -76,7 +75,7 @@ int main(int argc, char **argv)
 		};
 
 		{
-			Transactor<Event1Type, Event2Type> Transact(MainMutex, TransactionPath, Event1, Event2);
+			Transactor<Event1Type, Event2Type> Transact(TransactionPath, Event1, Event2);
 			Transact(Event1Type(), a, b, b2, c, d, e);
 			Transact(Event2Type(), 39, -339, 289200000, 0, 1);
 			assert(Counter == 2);
@@ -90,7 +89,7 @@ int main(int argc, char **argv)
 
 		{
 			Fail = false;
-			Transactor<Event1Type, Event2Type> Transact(MainMutex, TransactionPath, Event1, Event2);
+			Transactor<Event1Type, Event2Type> Transact(TransactionPath, Event1, Event2);
 			assert(Counter == 1);
 		}
 	}

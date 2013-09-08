@@ -21,12 +21,11 @@ template <typename Type, typename OtherType, typename ...RemainingTypes> struct 
 
 template <typename ...MessageTypes> struct Transactor
 {
-	template <typename ...CallbackTypes> Transactor(std::mutex &CoreMutex, bfs::path const &TransactionPath, CallbackTypes ...Callbacks) : CoreMutex(CoreMutex), TransactionPath(TransactionPath), Log("transaction recovery"), Reader(Log, std::forward<CallbackTypes>(Callbacks)...)
+	template <typename ...CallbackTypes> Transactor(bfs::path const &TransactionPath, CallbackTypes ...Callbacks) : TransactionPath(TransactionPath), Log("transaction recovery"), Reader(Log, std::forward<CallbackTypes>(Callbacks)...)
 	{
 		for (bfs::directory_iterator Filename(TransactionPath); Filename != bfs::directory_iterator(); ++Filename)
 		{
 			{
-				std::lock_guard<std::mutex> Guard(CoreMutex);
 				bfs::ifstream In(*Filename, std::ifstream::in | std::ifstream::binary);
 				while (In)
 				{
@@ -47,10 +46,7 @@ template <typename ...MessageTypes> struct Transactor
 		if (!Out) throw SystemError() << "Could not create file " << ThreadPath << ".";
 		auto const &Data = MessageType::Write(Arguments...);
 		Out.write((char const *)&Data[0], static_cast<std::streamsize>(Data.size()));
-		{
-			std::lock_guard<std::mutex> Guard(CoreMutex);
-			Reader.template Call<MessageType>(std::forward<ArgumentTypes const &>(Arguments)...);
-		}
+		Reader.template Call<MessageType>(std::forward<ArgumentTypes const &>(Arguments)...);
 		bfs::remove(ThreadPath / (std::string)(String() << std::this_thread::get_id()));
 	}
 
@@ -58,7 +54,6 @@ template <typename ...MessageTypes> struct Transactor
 		{ Act<MessageType>(std::forward<ArgumentTypes const &>(Arguments)...); }
 
 	private:
-		std::mutex &CoreMutex;
 		bfs::path TransactionPath;
 		StandardOutLog Log;
 		Protocol::Reader<StandardOutLog, MessageTypes...> Reader;

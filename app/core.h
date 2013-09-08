@@ -22,13 +22,15 @@ enum class ActionError
 	Unknown,
 	Exists,
 	Missing,
-	Invalid
+	Invalid,
+	Restricted
 };
 
 template <typename ValueType> struct ActionResult
 {
 	ActionResult(ActionError Code) : Code(Code) { assert(Code != ActionError::OK); }
-	ActionResult(ValueType const &Value) : Code(ActionError::OK), Value(Value) { }
+	template <typename InitValueType> ActionResult(InitValueType const &Value) : Code(ActionError::OK), Value(Value) { }
+	template <typename InitValueType> ActionResult(InitValueType &&Value) : Code(ActionError::OK), Value(Value) { }
 	operator bool(void) const { return Code == ActionError::OK; }
 	operator ValueType(void) { assert(Code == ActionError::OK); return Value; }
 	ValueType &operator *(void) { return Value; }
@@ -241,21 +243,26 @@ struct ShareCore
 
 	bfs::path GetRealPath(ShareFile const &File) const;
 
-	ActionResult<ShareFile> Create(bfs::path const &Path, bool IsFile, bool CanWrite, bool CanExecute);
-	GetResult Get(NodeID const &ID);
 	GetResult Get(bfs::path const &Path);
-	NodeID GetPrecedingChange(NodeID const &Change);
+
+	ActionError CreateDirectory(bfs::path const &Path, bool CanWrite, bool CanExecute);
+	//ActionResult<Optional<OpenFileContext>> CreateFile(bfs::path const &Path, bool CanWrite, bool CanExecute, bool Open);
+	ActionResult<std::unique_ptr<ShareFile>> OpenDirectory(bfs::path const &Path);
 	std::vector<ShareFile> GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count);
-	void SetPermissions(ShareFile const &File, bool CanWrite, bool CanExecute);
-	void SetTimestamp(ShareFile const &File, Timestamp const &NewTimestamp);
-	ActionError Delete(ShareFile const &File);
+	ActionError SetPermissions(bfs::path const &Path, bool CanWrite, bool CanExecute);
+	ActionError SetTimestamp(bfs::path const &Path, Timestamp const &NewTimestamp);
+	ActionError Delete(bfs::path const &Path);
 	ActionError Move(bfs::path const &From, bfs::path const &To);
 
 	private:
-		bool IsRootPath(bfs::path const &Path);
-		bool IsSplitPath(bfs::path const &Path);
-		ShareFile SplitInstanceFile(Counter Index);
-	  
+		//GetResult Get(NodeID const &ID);
+		GetResult GetInternal(bfs::path const &Path);
+		NodeID GetPrecedingChange(NodeID const &Change);
+
+		bool IsRootPath(bfs::path const &Path) const;
+		bool IsSplitPath(bfs::path const &Path) const;
+		ShareFile SplitInstanceFile(Counter Index) const;
+
 		bfs::path const Root;
 		bfs::path const FilePath;
 

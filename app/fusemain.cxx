@@ -30,7 +30,7 @@ void ExportAttributes(ShareFile const &File, struct stat *Output)
 		S_IRUSR |
 		(File.CanWrite() ? S_IWUSR : 0) |
 		(File.CanExecute() ? S_IXUSR : 0) |
-		S_IRGRP | 
+		S_IRGRP |
 		(File.CanWrite() ? S_IWGRP : 0) |
 		(File.CanExecute() ? S_IXGRP : 0) |
 		S_IROTH |
@@ -130,8 +130,8 @@ int main(int argc, char **argv)
 	{
 		GetResult File = Core->Get(path);
 		if (!File) return -ENOENT;
-		if (
-			!(mask & R_OK) &&
+		if
+		(
 			(!(mask & W_OK) || File->CanWrite()) &&
 			(!(mask & X_OK) || File->CanExecute())
 		) return 0;
@@ -153,6 +153,7 @@ int main(int argc, char **argv)
 			case ActionError::OK: break;
 			case ActionError::Invalid: return -ENOTDIR;
 			case ActionError::Missing: return -ENOENT;
+			case ActionError::Restricted: return -EACCES;
 			default: assert(false);
 		}
 		return 0;
@@ -160,17 +161,25 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.chmod = [](const char *path, mode_t mode)
 	{
-		GetResult File = Core->Get(path);
-		if (!File) return -ENOENT;
-		Core->SetPermissions(*File, mode & S_IWUSR, mode & S_IXUSR);
+		switch (Core->SetPermissions(path, mode & S_IWUSR, mode & S_IXUSR))
+		{
+			case ActionError::OK: break;
+			case ActionError::Invalid: return -ENOTDIR;
+			case ActionError::Missing: return -ENOENT;
+			default: assert(false);
+		}
 		return 0;
 	};
 
 	FuseCallbacks.utimens = [](const char *path, const struct timespec ts[2])
 	{
-		GetResult File = Core->Get(path);
-		if (!File) return -ENOENT;
-		Core->SetTimestamp(*File, static_cast<Timestamp::Type>(ts[1].tv_sec));
+		switch (Core->SetTimestamp(path, static_cast<Timestamp::Type>(ts[1].tv_sec)))
+		{
+			case ActionError::OK: break;
+			case ActionError::Invalid: return -ENOTDIR;
+			case ActionError::Missing: return -ENOENT;
+			default: assert(false);
+		}
 		/*struct timeval tv[2];
 		tv[0].tv_sec = ts[0].tv_sec;
 		tv[0].tv_usec = ts[0].tv_nsec / 1000;
@@ -183,23 +192,34 @@ int main(int argc, char **argv)
 	// Directory access
 	FuseCallbacks.mkdir = [](const char *path, mode_t mode)
 	{
-		auto Result = Core->Create(path, false, mode & S_IWUSR, mode & S_IXUSR);
-		switch (Result.Code)
+		switch (Core->CreateDirectory(path, mode & S_IWUSR, mode & S_IXUSR))
 		{
 			case ActionError::OK: break;
 			case ActionError::Unknown: return -EEXIST;
-			default: assert(false); break;
+			default: assert(false); return -ELOOP;
 		}
 		return 0;
 	};
 
 	FuseCallbacks.opendir = [](const char *path, fuse_file_info *fi)
 	{
-		GetResult File = Core->Get(path);
-		if (!File) return -ENOENT;
-		if (File->IsFile()) return -ENOTDIR;
-		if (((fi->flags & O_WRONLY) || (fi->flags & O_RDWR)) && !File->CanWrite()) return -EACCES;
-		fi->fh = reinterpret_cast<decltype(fi->fh)>(new ShareFile(*File));
+		ActionResult<std::unique_ptr<ShareFile>> Result = Core->OpenDirectory(path);
+		switch (Result.Code)
+		{
+			case ActionError::OK: break;
+			case ActionError::Invalid: return -ENOTDIR;
+			case ActionError::Missing: return -ENOENT;
+			default: assert(false); return -ELOOP;
+		}
+		assert(*Result);
+		if (((fi->flags & O_WRONLY) || (fi->flags & O_RDWR)) && !(*Result)->CanWrite()) return -EACCES; // Can this occur?
+		fi->fh = reinterpret_cast<decltype(fi->fh)>((*Result).release());
+		return 0;
+	};
+
+	FuseCallbacks.releasedir = [](const char *, struct fuse_file_info *fi)
+	{
+		delete reinterpret_cast<ShareFile *>(fi->fh);
 		return 0;
 	};
 
@@ -232,19 +252,14 @@ int main(int argc, char **argv)
 		return 0;
 	};
 
-	FuseCallbacks.releasedir = [](const char *, struct fuse_file_info *fi)
-	{
-		delete reinterpret_cast<ShareFile *>(fi->fh);
-		return 0;
-	};
-
 	FuseCallbacks.rmdir = [](const char *path)
 	{
-		GetResult File = Core->Get(path);
-		if (!File) return -ENOENT;
-		if (Core->GetDirectory(*File, 0, 1).empty())
-			return -ENOTEMPTY;
-		Core->Delete(*File);
+		switch (Core->Delete(path))
+		{
+			case ActionError::Invalid: return -ENOTDIR;
+			case ActionError::Missing: return -ENOENT;
+			default: assert(false); return -ELOOP;
+		}
 		return 0;
 	};
 
