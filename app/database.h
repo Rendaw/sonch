@@ -14,8 +14,8 @@ template <typename DataType> struct Optional
 {
 	Optional(void) : Valid(false) {}
 	Optional(DataType const &Data) : Valid(true), Data(Data) {}
-	operator bool(void) { return Valid; }
-	bool operator !(void) { return !Valid; }
+	operator bool(void) const { return Valid; }
+	bool operator !(void) const { return !Valid; }
 	DataType &operator *(void) { Assert(Valid); return Data; }
 	DataType *operator ->(void) { Assert(Valid); return &Data; }
 	bool Valid;
@@ -28,7 +28,7 @@ template <typename Classification> using BinaryType = Type<Binary<Classification
 
 template <typename Operations> struct BareSQLDatabase
 {
-	inline BareSQLDatabase(bfs::path const &Path = bfs::path()) : Context(nullptr)
+	inline BareSQLDatabase(bfs::path const &Path) : Context(nullptr)
 	{
 		if ((Path.empty() && (sqlite3_open(":memory:", &Context) != 0)) ||
 			(!Path.empty() && (sqlite3_open(Path.string().c_str(), &Context) != 0)))

@@ -35,7 +35,7 @@ int main(int argc, char **argv)
 		e2.whatever = 2929;
 		e2.whatever2 = -222;
 
-		SQLDatabase<Operations> Database;
+		SQLDatabase<Operations> Database(bfs::path{});
 
 		Database.Execute("CREATE TABLE one (a INTEGER, b BOOLEAN, b2 BOOLEAN, c DATETIME, d VARCHAR, e BINARY)");
 		auto Insert = Database.Prepare<void(int, bool, bool, uint64_t, std::string, decltype(e))>("INSERT INTO one VALUES (?, ?, ?, ?, ?, ?)");

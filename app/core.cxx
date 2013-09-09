@@ -18,7 +18,7 @@ enum class DatabaseVersion : unsigned int
 	Latest = End - 1
 };
 
-CoreDatabaseStructure::CoreDatabaseStructure(bfs::path const &DatabasePath, bool Create, std::string const &InstanceName, UUID const &InstanceID)
+CoreDatabaseStructure::CoreDatabaseStructure(bfs::path const &DatabasePath, bool Create, std::string const &InstanceName, UUID const &InstanceID) : SQLDatabase<CoreDatabaseOperations>(DatabasePath)
 {
 	if (Create)
 	{
@@ -43,7 +43,7 @@ CoreDatabaseStructure::CoreDatabaseStructure(bfs::path const &DatabasePath, bool
 		"("
 			"\"Filename\" ASC"
 		")");
-		Execute("INSERT INTO \"Instances\" (\"ID\", \"Name\", \"Filename\") VALUES (?, ?, ?)", InstanceName, InstanceName, InstanceID);
+		Execute("INSERT INTO \"Instances\" (\"ID\", \"Name\", \"Filename\") VALUES (?, ?, ?)", InstanceID, InstanceName, InstanceName);
 
 		Execute("CREATE TABLE \"Counters\" "
 		"("
@@ -125,6 +125,8 @@ CoreDatabase::CoreDatabase(bfs::path const &DatabasePath, bool Create, std::stri
 
 static std::string GetInternalFilename(NodeID const &ID, NodeID const &Change)
 	{ return String() << *ID.Instance << "-" << *ID.Index << "-" << *Change.Instance << "-" << *Change.Index; }
+
+void ValidatePath(bfs::path const &Path) { Assert(*Path.begin() == "/"); }
 
 ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName) :
 	Root(Root), FilePath(Root / "." App / "files"),
@@ -327,14 +329,15 @@ bfs::path ShareCore::GetRoot(void) const { return Root; }
 
 bfs::path ShareCore::GetRealPath(ShareFile const &File) const
 {
-	assert(File.IsFile());
+	Assert(File.IsFile());
 	return FilePath / GetInternalFilename(File.ID(), File.Change());
 }
 
 GetResult ShareCore::Get(bfs::path const &Path)
 {
+	ValidatePath(Path);
 #ifndef NDEBUG
-	assert(Mutex.try_lock());
+	Assert(Mutex.try_lock());
 	Mutex.unlock();
 #endif
 	std::lock_guard<std::mutex> Guard(Mutex);
@@ -343,14 +346,18 @@ GetResult ShareCore::Get(bfs::path const &Path)
 
 ActionError ShareCore::CreateDirectory(bfs::path const &Path, bool CanWrite, bool CanExecute)
 {
+	ValidatePath(Path);
 	std::lock_guard<std::mutex> Guard(Mutex);
+	auto Parent = GetInternal(Path.parent_path());
+	if (IsSplitPath(Path)) return ActionError::Illegal;
+	if (!Parent) return ActionError::Missing;
+	if (Parent->IsFile()) return ActionError::Invalid;
+	if (Database->GetFile(Parent->ID(), Path.filename().string()))
+		return ActionError::Exists;
 	Database->Begin();
 	UUID FileIndex = *Database->GetFileIndex();
 	Database->IncrementFileIndex();
 	Database->End();
-	auto Parent = GetInternal(Path.parent_path());
-	if (!Parent) return ActionError::Missing;
-	if (Parent->IsFile()) return ActionError::Invalid;
 	(*Transact)(CTV1Create(), FileIndex, Parent->ID(), Path.filename().string(), false, SharePermissions{CanWrite, CanExecute});
 	Log->Debug() << "Created file " << HostInstanceIndex << " " << *FileIndex << " / 0 0";
 	return ActionError::OK;
@@ -358,6 +365,7 @@ ActionError ShareCore::CreateDirectory(bfs::path const &Path, bool CanWrite, boo
 
 ActionResult<std::unique_ptr<ShareFile>> ShareCore::OpenDirectory(bfs::path const &Path)
 {
+	ValidatePath(Path);
 	std::lock_guard<std::mutex> Guard(Mutex);
 	auto Out = GetInternal(Path);
 	if (!Out) return Out.Code;
@@ -381,19 +389,21 @@ std::vector<ShareFile> ShareCore::GetDirectory(ShareFile const &File, unsigned i
 			std::string &&Name, bool &&IsFile, Timestamp &&Modified,
 			SharePermissions &&Permissions, bool &&IsSplit)
 			{ Out.push_back(ShareFile{ID, Change, Parent, Name, IsFile, Modified, Permissions, IsSplit}); });
-	assert(Out.size() <= Count);
+	Assert(Out.size() <= Count);
 	return Out;
 }
 
 ActionError ShareCore::SetPermissions(bfs::path const &Path, bool CanWrite, bool CanExecute)
 {
+	ValidatePath(Path);
 	std::lock_guard<std::mutex> Guard(Mutex);
+	auto File = GetInternal(Path);
+	if (!File) return File.Code;
 	Database->Begin();
 	UUID ChangeIndex = *Database->GetChangeIndex();
 	Database->IncrementChangeIndex();
+	Log->Debug() << "DEBUG: ChangeIndex(" << *ChangeIndex << ")++ " << __LINE__;
 	Database->End();
-	auto File = GetInternal(Path);
-	if (!File) return File.Code;
 	(*Transact)(CTV1SetPermissions(),
 		*File, ChangeIndex,
 		CanWrite, CanExecute);
@@ -404,13 +414,15 @@ ActionError ShareCore::SetPermissions(bfs::path const &Path, bool CanWrite, bool
 
 ActionError ShareCore::SetTimestamp(bfs::path const &Path, Timestamp const &NewTimestamp)
 {
+	ValidatePath(Path);
 	std::lock_guard<std::mutex> Guard(Mutex);
+	auto File = GetInternal(Path);
+	if (!File) return File.Code;
 	Database->Begin();
 	UUID ChangeIndex = *Database->GetChangeIndex();
 	Database->IncrementChangeIndex();
+	Log->Debug() << "DEBUG: ChangeIndex(" << *ChangeIndex << ")++ " << __LINE__;
 	Database->End();
-	auto File = GetInternal(Path);
-	if (!File) return File.Code;
 	(*Transact)(CTV1SetTimestamp(),
 		*File, ChangeIndex,
 		NewTimestamp);
@@ -421,6 +433,7 @@ ActionError ShareCore::SetTimestamp(bfs::path const &Path, Timestamp const &NewT
 
 ActionError ShareCore::Delete(bfs::path const &Path)
 {
+	ValidatePath(Path);
 	if (IsRootPath(Path)) return ActionError::Illegal;
 	std::lock_guard<std::mutex> Guard(Mutex);
 	auto File = GetInternal(Path);
@@ -434,12 +447,14 @@ ActionError ShareCore::Delete(bfs::path const &Path)
 ActionError ShareCore::Move(bfs::path const &From, bfs::path const &To)
 {
 	if (IsRootPath(From)) return ActionError::Illegal;
-	if (IsSplitPath(From)) return ActionError::Illegal;
+	if (IsSplitPath(From)) return ActionError::Illegal; // TODO make this okay for non-pseudo, but a copy and delete rather than a reparent
+	if (IsSplitPath(To)) return ActionError::Illegal;
 	bool DeleteAfter = false;
 	{ std::lock_guard<std::mutex> Guard(Mutex);
 		Database->Begin();
 		UUID ChangeIndex = *Database->GetChangeIndex();
 		Database->IncrementChangeIndex();
+		Log->Debug() << "DEBUG: ChangeIndex(" << *ChangeIndex << ")++ " << __LINE__;
 		Database->End();
 
 		auto FromFile = GetInternal(From);
@@ -474,14 +489,16 @@ ActionError ShareCore::Move(bfs::path const &From, bfs::path const &To)
 
 GetResult ShareCore::GetInternal(bfs::path const &Path)
 {
-	assert(!Mutex.try_lock());
+	ValidatePath(Path);
+	Assert(!Mutex.try_lock());
 	auto ParentFile = Database->GetFile({HostInstanceIndex, NullIndex}, "");
-	assert(ParentFile);
+	Assert(ParentFile);
 	bfs::path::iterator PathIterator = ++Path.begin();
 	if (IsRootPath(Path)) return {ShareFile(*ParentFile)};
 
 	Counter SplitInstance = HostInstanceIndex;
-	if (IsSplitPath(Path))
+	bool const IsSplit = IsSplitPath(Path);
+	if (IsSplit)
 	{
 		if (++PathIterator == Path.end()) return SplitFile;
 		auto GotInstance = Database->GetInstanceIndex(PathIterator->string());
@@ -496,20 +513,24 @@ GetResult ShareCore::GetInternal(bfs::path const &Path)
 		bfs::path::iterator NextPathIterator = PathIterator; ++NextPathIterator;
 		for (; NextPathIterator != Path.end(); PathIterator = NextPathIterator, NextPathIterator++)
 		{
-			ParentFile = Database->GetFile(ShareFile(*ParentFile).ID(), PathIterator->string());
+			Log->Debug() << "DEBUG: Getting path " << Path << ", getting parent " << PathIterator->string();
+			auto OriginalParentFile = ParentFile;
+			if (IsSplit)
+				ParentFile = Database->GetSplitFile(ShareFile(*OriginalParentFile).ID(), SplitInstance, PathIterator->string());
+			if (!IsSplit || !ParentFile)
+				ParentFile = Database->GetFile(ShareFile(*OriginalParentFile).ID(), PathIterator->string());
 			if (!ParentFile)
 				return ActionError::Missing;
 			if (ShareFile(*ParentFile).IsFile())
 				return ActionError::Invalid;
-			if (true /*!HasSplits(SplitInstance, ParentFile)*/)
-				return ActionError::Missing;
 		}
 	}
 
-	auto Out = (SplitInstance == HostInstanceIndex) ?
+	auto Out = (!IsSplit) ?
 		Database->GetFile(ShareFile(*ParentFile).ID(), PathIterator->string()) :
 		Database->GetSplitFile(ShareFile(*ParentFile).ID(), SplitInstance, PathIterator->string());
 	if (!Out) return ActionError::Missing;
+	Log->Debug() << "DEBUG: Getting path " << Path << ", id, change id " << *std::get<0>(*Out).Index <<  ", " << *std::get<2>(*Out).Index;
 	return ShareFile(*Out);
 }
 
@@ -518,7 +539,7 @@ NodeID ShareCore::GetPrecedingChange(NodeID const &Change)
 	if (!Change) return NodeID();
 	std::lock_guard<std::mutex> Guard(Mutex);
 	auto Out = Database->GetChange(Change);
-	assert(Out);
+	Assert(Out);
 	return *Out;
 }
 
