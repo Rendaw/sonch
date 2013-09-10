@@ -457,18 +457,22 @@ ActionError ShareCore::Move(bfs::path const &From, bfs::path const &To)
 		auto FromFile = GetInternal(From);
 		if (!FromFile) return FromFile.Code;
 
-		auto ToFile = Get(To);
+		std::string ToName = To.filename().string();
+		auto ToFile = GetInternal(To);
 		if (ToFile.Code == ActionError::Missing)
-			ToFile = Get(To.parent_path().string());
+			ToFile = GetInternal(To.parent_path().string());
+		else if (ToFile && !ToFile->IsFile())
+			ToName = From.filename().string();
+
 		if (!ToFile) return ToFile.Code;
 		if (!ToFile->CanWrite()) return ActionError::Restricted;
 
 		if (ToFile->IsFile())
 		{
-			(*Transact)(CTV1Move(), *FromFile, ChangeIndex, ToFile->Parent(), ToFile->Name());
+			(*Transact)(CTV1Move(), *FromFile, ChangeIndex, ToFile->Parent(), ToName);
 			DeleteAfter = true;
 		}
-		else (*Transact)(CTV1Move(), *FromFile, ChangeIndex, ToFile->ID(), FromFile->Name());
+		else (*Transact)(CTV1Move(), *FromFile, ChangeIndex, ToFile->ID(), ToName);
 		Log->Debug() << "Changed file " << *FromFile->ID().Instance << " " << *FromFile->ID().Index << " / " <<
 			*FromFile->Change().Instance << " " << *FromFile->Change().Index << " -> " << HostInstanceIndex << " " << *ChangeIndex;
 	}

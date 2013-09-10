@@ -110,7 +110,7 @@ int main(int, char **)
 		// Move to subdir
 		bfs::path Subdir2Path(RootPath / "subdir");
 		Assert(Core.CreateDirectory(Subdir2Path, true, true), ActionError::OK);
-		auto Subdir2 = Core.Get(SubdirPath);
+		auto Subdir2 = Core.Get(Subdir2Path);
 		Assert(Subdir2);
 		Assert(Subdir2->ID().Instance, Counter::Type(0));
 		Assert(Subdir2->ID().Index, UUID::Type(3));
