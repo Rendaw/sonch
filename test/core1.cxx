@@ -7,7 +7,8 @@ int main(int, char **)
 	try
 	{
 		bfs::path ExternalRootPath("core1root");
-		Cleanup Cleanup([&]()
+		//boost::filesystem::remove_all(ExternalRootPath); // Cleanup pre
+		Cleanup Cleanup([&]() // Cleanup post
 		{
 			bfs::ifstream Log(ExternalRootPath / "log.txt");
 			std::copy(std::istreambuf_iterator<char>(Log), std::istreambuf_iterator<char>(), std::ostreambuf_iterator<char>(std::cerr));

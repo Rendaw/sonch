@@ -54,7 +54,7 @@ template <typename ...MessageTypes> struct Transactor
 		{ Act<MessageType>(std::forward<ArgumentTypes const &>(Arguments)...); }
 
 	private:
-		bfs::path TransactionPath;
+		bfs::path const TransactionPath;
 		StandardOutLog Log;
 		Protocol::Reader<StandardOutLog, MessageTypes...> Reader;
 };

@@ -402,7 +402,6 @@ ActionError ShareCore::SetPermissions(bfs::path const &Path, bool CanWrite, bool
 	Database->Begin();
 	UUID ChangeIndex = *Database->GetChangeIndex();
 	Database->IncrementChangeIndex();
-	Log->Debug() << "DEBUG: ChangeIndex(" << *ChangeIndex << ")++ " << __LINE__;
 	Database->End();
 	(*Transact)(CTV1SetPermissions(),
 		*File, ChangeIndex,
@@ -421,7 +420,6 @@ ActionError ShareCore::SetTimestamp(bfs::path const &Path, Timestamp const &NewT
 	Database->Begin();
 	UUID ChangeIndex = *Database->GetChangeIndex();
 	Database->IncrementChangeIndex();
-	Log->Debug() << "DEBUG: ChangeIndex(" << *ChangeIndex << ")++ " << __LINE__;
 	Database->End();
 	(*Transact)(CTV1SetTimestamp(),
 		*File, ChangeIndex,
@@ -454,7 +452,6 @@ ActionError ShareCore::Move(bfs::path const &From, bfs::path const &To)
 		Database->Begin();
 		UUID ChangeIndex = *Database->GetChangeIndex();
 		Database->IncrementChangeIndex();
-		Log->Debug() << "DEBUG: ChangeIndex(" << *ChangeIndex << ")++ " << __LINE__;
 		Database->End();
 
 		auto FromFile = GetInternal(From);
@@ -513,7 +510,6 @@ GetResult ShareCore::GetInternal(bfs::path const &Path)
 		bfs::path::iterator NextPathIterator = PathIterator; ++NextPathIterator;
 		for (; NextPathIterator != Path.end(); PathIterator = NextPathIterator, NextPathIterator++)
 		{
-			Log->Debug() << "DEBUG: Getting path " << Path << ", getting parent " << PathIterator->string();
 			auto OriginalParentFile = ParentFile;
 			if (IsSplit)
 				ParentFile = Database->GetSplitFile(ShareFile(*OriginalParentFile).ID(), SplitInstance, PathIterator->string());
@@ -530,7 +526,6 @@ GetResult ShareCore::GetInternal(bfs::path const &Path)
 		Database->GetFile(ShareFile(*ParentFile).ID(), PathIterator->string()) :
 		Database->GetSplitFile(ShareFile(*ParentFile).ID(), SplitInstance, PathIterator->string());
 	if (!Out) return ActionError::Missing;
-	Log->Debug() << "DEBUG: Getting path " << Path << ", id, change id " << *std::get<0>(*Out).Index <<  ", " << *std::get<2>(*Out).Index;
 	return ShareFile(*Out);
 }
 

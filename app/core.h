@@ -71,8 +71,8 @@ struct ShareFile : ShareFileTuple
 	using ShareFileTuple::ShareFileTuple;
 
 	inline NodeID const &ID(void) const { return std::get<0>(*this); }
-	inline NodeID const &Parent(void) const { return std::get<1>(*this); }
-	inline NodeID const &Change(void) const { return std::get<2>(*this); }
+	inline NodeID const &Change(void) const { return std::get<1>(*this); }
+	inline NodeID const &Parent(void) const { return std::get<2>(*this); }
 	inline std::string const &Name(void) const { return std::get<3>(*this); }
 	inline bool const &IsFile(void) const { return std::get<4>(*this); }
 	inline Timestamp const &ModifiedTime(void) const { return std::get<5>(*this); }
@@ -160,6 +160,8 @@ struct CoreDatabaseOperations
 	{
 		int const BaseIndex = Index;
 		Index += 2;
+		std::cout << "Unbinding nodeID instance " << sqlite3_column_int(Context, BaseIndex)
+			<< " index " << sqlite3_column_int(Context, BaseIndex + 1) << std::endl;
 		return
 		{
 			static_cast<Counter::Type>(sqlite3_column_int(Context, BaseIndex)),
