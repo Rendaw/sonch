@@ -3,6 +3,7 @@
 
 #include "database.h"
 #include "transaction.h"
+#include "moat.h"
 
 // TODO
 // Test fuse different user access, group permissions
@@ -235,9 +236,9 @@ DefineProtocolMessage(CTV1Move, CoreTransactorVersion1,
 		NodeID ParentID,
 		std::string Name))
 
-struct ShareCore
+struct ShareCoreInner
 {
-	ShareCore(bfs::path const &Root, std::string const &InstanceName = std::string());
+	ShareCoreInner(bfs::path const &Root, std::string const &InstanceName = std::string());
 
 	bfs::path GetRoot(void) const;
 
@@ -272,6 +273,7 @@ struct ShareCore
 		UUID InstanceID;
 		std::string InstanceFilename;
 
+		friend class MoatT<ShareCoreInner>;
 		std::mutex Mutex;
 
 		ShareFile SplitFile;
@@ -289,6 +291,8 @@ struct ShareCore
 		} Transaction;
 		std::unique_ptr<CoreTransactor> Transact;
 };
+
+typedef MoatT<ShareCoreInner> ShareCore;
 
 #endif
 

@@ -107,11 +107,11 @@ int main(int argc, char **argv)
 	// Lookup/read metadata actions
 	FuseCallbacks.getattr = [](const char *path, struct stat *stbuf)
 	{
-		GetResult File = Core->Get(path);
+		GetResult File = (*Core)->Get(path);
 		if (!File) return -ENOENT;
 		if (File->IsFile())
 		{
-			int Result = lstat(Core->GetRealPath(*File).string().c_str(), stbuf);
+			int Result = lstat((*Core)->GetRealPath(*File).string().c_str(), stbuf);
 			if (Result == -1) return -errno;
 		}
 		ExportAttributes(*File, stbuf);
@@ -128,7 +128,7 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.access = [](const char *path, int mask)
 	{
-		GetResult File = Core->Get(path);
+		GetResult File = (*Core)->Get(path);
 		if (!File) return -ENOENT;
 		if
 		(
@@ -140,7 +140,7 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.statfs = [](const char *path, struct statvfs *stbuf)
 	{
-		int Result = statvfs(Core->GetRoot().string().c_str(), stbuf);
+		int Result = statvfs((*Core)->GetRoot().string().c_str(), stbuf);
 		if (Result == -1) return -errno;
 		return 0;
 	};
@@ -148,7 +148,7 @@ int main(int argc, char **argv)
 	// Directory or file changes
 	FuseCallbacks.rename = [](const char *from, const char *to)
 	{
-		switch (Core->Move(from, to))
+		switch ((*Core)->Move(from, to))
 		{
 			case ActionError::OK: break;
 			case ActionError::Invalid: return -ENOTDIR;
@@ -161,7 +161,7 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.chmod = [](const char *path, mode_t mode)
 	{
-		switch (Core->SetPermissions(path, mode & S_IWUSR, mode & S_IXUSR))
+		switch ((*Core)->SetPermissions(path, mode & S_IWUSR, mode & S_IXUSR))
 		{
 			case ActionError::OK: break;
 			case ActionError::Invalid: return -ENOTDIR;
@@ -173,7 +173,7 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.utimens = [](const char *path, const struct timespec ts[2])
 	{
-		switch (Core->SetTimestamp(path, static_cast<Timestamp::Type>(ts[1].tv_sec)))
+		switch ((*Core)->SetTimestamp(path, static_cast<Timestamp::Type>(ts[1].tv_sec)))
 		{
 			case ActionError::OK: break;
 			case ActionError::Invalid: return -ENOTDIR;
@@ -192,7 +192,7 @@ int main(int argc, char **argv)
 	// Directory access
 	FuseCallbacks.mkdir = [](const char *path, mode_t mode)
 	{
-		switch (Core->CreateDirectory(path, mode & S_IWUSR, mode & S_IXUSR))
+		switch ((*Core)->CreateDirectory(path, mode & S_IWUSR, mode & S_IXUSR))
 		{
 			case ActionError::OK: break;
 			case ActionError::Unknown: return -EEXIST;
@@ -203,7 +203,7 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.opendir = [](const char *path, fuse_file_info *fi)
 	{
-		ActionResult<std::unique_ptr<ShareFile>> Result = Core->OpenDirectory(path);
+		ActionResult<std::unique_ptr<ShareFile>> Result = (*Core)->OpenDirectory(path);
 		switch (Result.Code)
 		{
 			case ActionError::OK: break;
@@ -231,7 +231,7 @@ int main(int argc, char **argv)
 
 		while (true)
 		{
-			auto Files = Core->GetDirectory(*File, static_cast<unsigned int>(offset), BlockCount);
+			auto Files = (*Core)->GetDirectory(*File, static_cast<unsigned int>(offset), BlockCount);
 			unsigned int Count = 0;
 			for (auto const &File : Files)
 			{
@@ -254,7 +254,7 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.rmdir = [](const char *path)
 	{
-		switch (Core->Delete(path))
+		switch ((*Core)->Delete(path))
 		{
 			case ActionError::Invalid: return -ENOTDIR;
 			case ActionError::Missing: return -ENOENT;
@@ -266,7 +266,7 @@ int main(int argc, char **argv)
 	// File access
 	/*FuseCallbacks.create = [](const char *path, mode_t mode, struct fuse_file_info *fi)
 	{
-		int fd = open(Core->TranslatePath(path).c_str(), fi->flags, mode);
+		int fd = open((*Core)->TranslatePath(path).c_str(), fi->flags, mode);
 		if (fd == -1) return -errno;
 		fi->fh = fd;
 		return 0;
@@ -274,9 +274,9 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.open = [](const char *path, struct fuse_file_info *fi)
 	{
-		ShareFile *Core->Get(path).release();
+		ShareFile *(*Core)->Get(path).release();
 		fi->fh = reinterpret_cast<decltype(fi->fh)>(ShareFile);
-		int Result = open(Core->TranslatePath(path).c_str(), fi->flags);
+		int Result = open((*Core)->TranslatePath(path).c_str(), fi->flags);
 		if (Result == -1) return -errno;
 		close(Result);
 		return 0;
@@ -285,7 +285,7 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.truncate = [](const char *path, off_t size)
 	{
-		int Result = truncate(Core->TranslatePath(path).c_str(), size);
+		int Result = truncate((*Core)->TranslatePath(path).c_str(), size);
 		if (Result == -1) return -errno;
 		return 0;
 	};
@@ -299,7 +299,7 @@ int main(int argc, char **argv)
 
 	FuseCallbacks.unlink = [](const char *path)
 	{
-		int Result = unlink(Core->TranslatePath(path).c_str());
+		int Result = unlink((*Core)->TranslatePath(path).c_str());
 		if (Result == -1) return -errno;
 		return 0;
 	};

@@ -128,7 +128,7 @@ static std::string GetInternalFilename(NodeID const &ID, NodeID const &Change)
 
 void ValidatePath(bfs::path const &Path) { Assert(*Path.begin() == "/"); }
 
-ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName) :
+ShareCoreInner::ShareCoreInner(bfs::path const &Root, std::string const &InstanceName) :
 	Root(Root), FilePath(Root / "." App / "files"),
 	InstanceName(InstanceName),
 	SplitFile(NodeID(), NodeID(), NodeID(), SplitDir, false, static_cast<Timestamp::Type>(0), SharePermissions{1, 1}, false)
@@ -325,15 +325,15 @@ ShareCore::ShareCore(bfs::path const &Root, std::string const &InstanceName) :
 		{ throw SystemError() << Error.what(); }
 }
 
-bfs::path ShareCore::GetRoot(void) const { return Root; }
+bfs::path ShareCoreInner::GetRoot(void) const { return Root; }
 
-bfs::path ShareCore::GetRealPath(ShareFile const &File) const
+bfs::path ShareCoreInner::GetRealPath(ShareFile const &File) const
 {
 	Assert(File.IsFile());
 	return FilePath / GetInternalFilename(File.ID(), File.Change());
 }
 
-GetResult ShareCore::Get(bfs::path const &Path)
+GetResult ShareCoreInner::Get(bfs::path const &Path)
 {
 	ValidatePath(Path);
 #ifndef NDEBUG
@@ -344,7 +344,7 @@ GetResult ShareCore::Get(bfs::path const &Path)
 	return GetInternal(Path);
 }
 
-ActionError ShareCore::CreateDirectory(bfs::path const &Path, bool CanWrite, bool CanExecute)
+ActionError ShareCoreInner::CreateDirectory(bfs::path const &Path, bool CanWrite, bool CanExecute)
 {
 	ValidatePath(Path);
 	std::lock_guard<std::mutex> Guard(Mutex);
@@ -363,7 +363,7 @@ ActionError ShareCore::CreateDirectory(bfs::path const &Path, bool CanWrite, boo
 	return ActionError::OK;
 }
 
-ActionResult<std::unique_ptr<ShareFile>> ShareCore::OpenDirectory(bfs::path const &Path)
+ActionResult<std::unique_ptr<ShareFile>> ShareCoreInner::OpenDirectory(bfs::path const &Path)
 {
 	ValidatePath(Path);
 	std::lock_guard<std::mutex> Guard(Mutex);
@@ -373,7 +373,7 @@ ActionResult<std::unique_ptr<ShareFile>> ShareCore::OpenDirectory(bfs::path cons
 	return new ShareFile(*Out);
 }
 
-std::vector<ShareFile> ShareCore::GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count)
+std::vector<ShareFile> ShareCoreInner::GetDirectory(ShareFile const &File, unsigned int From, unsigned int Count)
 {
 	std::lock_guard<std::mutex> Guard(Mutex);
 	std::vector<ShareFile> Out;
@@ -393,7 +393,7 @@ std::vector<ShareFile> ShareCore::GetDirectory(ShareFile const &File, unsigned i
 	return Out;
 }
 
-ActionError ShareCore::SetPermissions(bfs::path const &Path, bool CanWrite, bool CanExecute)
+ActionError ShareCoreInner::SetPermissions(bfs::path const &Path, bool CanWrite, bool CanExecute)
 {
 	ValidatePath(Path);
 	std::lock_guard<std::mutex> Guard(Mutex);
@@ -411,7 +411,7 @@ ActionError ShareCore::SetPermissions(bfs::path const &Path, bool CanWrite, bool
 	return ActionError::OK;
 }
 
-ActionError ShareCore::SetTimestamp(bfs::path const &Path, Timestamp const &NewTimestamp)
+ActionError ShareCoreInner::SetTimestamp(bfs::path const &Path, Timestamp const &NewTimestamp)
 {
 	ValidatePath(Path);
 	std::lock_guard<std::mutex> Guard(Mutex);
@@ -429,7 +429,7 @@ ActionError ShareCore::SetTimestamp(bfs::path const &Path, Timestamp const &NewT
 	return ActionError::OK;
 }
 
-ActionError ShareCore::Delete(bfs::path const &Path)
+ActionError ShareCoreInner::Delete(bfs::path const &Path)
 {
 	ValidatePath(Path);
 	if (IsRootPath(Path)) return ActionError::Illegal;
@@ -442,7 +442,7 @@ ActionError ShareCore::Delete(bfs::path const &Path)
 	return ActionError::OK;
 }
 
-ActionError ShareCore::Move(bfs::path const &From, bfs::path const &To)
+ActionError ShareCoreInner::Move(bfs::path const &From, bfs::path const &To)
 {
 	if (IsRootPath(From)) return ActionError::Illegal;
 	if (IsSplitPath(From)) return ActionError::Illegal; // TODO make this okay for non-pseudo, but a copy and delete rather than a reparent
@@ -480,7 +480,7 @@ ActionError ShareCore::Move(bfs::path const &From, bfs::path const &To)
 	return ActionError::OK;
 }
 
-/*GetResult ShareCore::Get(NodeID const &ID)
+/*GetResult ShareCoreInner::Get(NodeID const &ID)
 {
 	// Get primary instance of file by file id
 	auto Got = Database->GetFileByID(ID);
@@ -488,7 +488,7 @@ ActionError ShareCore::Move(bfs::path const &From, bfs::path const &To)
 	return {*Got};
 }*/
 
-GetResult ShareCore::GetInternal(bfs::path const &Path)
+GetResult ShareCoreInner::GetInternal(bfs::path const &Path)
 {
 	ValidatePath(Path);
 	Assert(!Mutex.try_lock());
@@ -533,7 +533,7 @@ GetResult ShareCore::GetInternal(bfs::path const &Path)
 	return ShareFile(*Out);
 }
 
-NodeID ShareCore::GetPrecedingChange(NodeID const &Change)
+NodeID ShareCoreInner::GetPrecedingChange(NodeID const &Change)
 {
 	if (!Change) return NodeID();
 	std::lock_guard<std::mutex> Guard(Mutex);
@@ -542,20 +542,20 @@ NodeID ShareCore::GetPrecedingChange(NodeID const &Change)
 	return *Out;
 }
 
-bool ShareCore::IsRootPath(bfs::path const &Path) const
+bool ShareCoreInner::IsRootPath(bfs::path const &Path) const
 {
 	bfs::path::iterator PathIterator = ++Path.begin();
 	return (PathIterator == Path.end());
 }
 
-bool ShareCore::IsSplitPath(bfs::path const &Path) const
+bool ShareCoreInner::IsSplitPath(bfs::path const &Path) const
 {
 	bfs::path::iterator PathIterator = ++Path.begin();
 	if (PathIterator == Path.end()) return false;
 	return *PathIterator == SplitDir;
 }
 
-ShareFile ShareCore::SplitInstanceFile(Counter Index) const
+ShareFile ShareCoreInner::SplitInstanceFile(Counter Index) const
 {
 	return std::forward_as_tuple(NodeID(), NodeID(), NodeID(), String() << *Index, false, Timestamp::Type(0), SharePermissions{1, 1}, false);
 }
